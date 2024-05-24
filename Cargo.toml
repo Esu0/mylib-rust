@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = [
+    "persistent-array", "union-find",
+]
+
+[workspace.package]
+edition = "2021"
+
+[workspace.dependencies]
+criterion = "0.5.1"
+rand = "0.8.5"
