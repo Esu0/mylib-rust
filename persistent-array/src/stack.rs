@@ -1,6 +1,7 @@
 use std::{
     alloc::{handle_alloc_error, Layout},
     cell::{Cell, UnsafeCell},
+    marker::PhantomData,
     mem::MaybeUninit,
     ptr::NonNull,
 };
@@ -8,9 +9,10 @@ use std::{
 pub struct PersistentStackPool<T> {
     pool: Box<[UnsafeCell<MaybeUninit<Node<T>>>]>,
     len: Cell<usize>,
+    _marker: PhantomData<Box<[UnsafeCell<Node<T>>]>>,
 }
 
-// unsafe impl<T: Send> Send for PersistentStackPool<T> {}
+unsafe impl<T: Send> Send for PersistentStackPool<T> {}
 
 impl<T> Drop for PersistentStackPool<T> {
     fn drop(&mut self) {
@@ -43,10 +45,7 @@ struct Node<T> {
 
 impl<T> Node<T> {
     fn new(prev: usize, value: T) -> Self {
-        Self {
-            prev,
-            value,
-        }
+        Self { prev, value }
     }
 }
 
@@ -56,6 +55,7 @@ impl<T> PersistentStackPool<T> {
             return Self {
                 pool: Box::new([]),
                 len: Cell::new(0),
+                _marker: PhantomData,
             };
         }
         unsafe {
@@ -64,13 +64,11 @@ impl<T> PersistentStackPool<T> {
             let Some(ptr) = NonNull::new(ptr) else {
                 handle_alloc_error(layout);
             };
-            let pool = NonNull::slice_from_raw_parts(
-                ptr,
-                size,
-            );
+            let pool = NonNull::slice_from_raw_parts(ptr, size);
             Self {
                 pool: Box::from_raw(pool.as_ptr()),
                 len: Cell::new(0),
+                _marker: PhantomData,
             }
         }
     }
@@ -81,7 +79,7 @@ impl<T> PersistentStackPool<T> {
             pool: self,
         }
     }
-    
+
     #[cfg(test)]
     fn check_invariant(&self) {
         let len = self.len.get();
@@ -93,13 +91,14 @@ impl<T> PersistentStackPool<T> {
     }
 }
 
-
 impl<'a, T> PersistentStack<'a, T> {
     pub fn push(&self, value: T) -> Self {
         let new_node = Node::new(self.head, value);
         let pool_last = self.pool.len.get();
         unsafe {
-            self.pool.pool[pool_last].get().write(MaybeUninit::new(new_node));
+            self.pool.pool[pool_last]
+                .get()
+                .write(MaybeUninit::new(new_node));
         }
         self.pool.len.set(pool_last + 1);
         Self {
@@ -147,7 +146,7 @@ mod tests {
         stack = stack.pop();
         pool.check_invariant();
         assert_eq!(stack.top(), Some(&42));
-        
+
         let prev_stack = stack;
         stack = stack.push(44);
         pool.check_invariant();
@@ -180,7 +179,13 @@ mod tests {
         let pool = PersistentStackPool::new(5);
         let stack = pool.get_empty_stack();
         let s = "hello".to_owned();
-        stack.push(s.clone()).push(s.clone()).push(s.clone()).push(s.clone()).push(s.clone()).push(s.clone());
+        stack
+            .push(s.clone())
+            .push(s.clone())
+            .push(s.clone())
+            .push(s.clone())
+            .push(s.clone())
+            .push(s.clone());
     }
 
     #[test]
