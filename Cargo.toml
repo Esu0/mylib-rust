@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "persistent-array", "union-find",
+    "persistent-array", "red-black-tree", "union-find",
 ]
 
 [workspace.package]
