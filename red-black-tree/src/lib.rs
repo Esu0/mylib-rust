@@ -30,6 +30,15 @@ impl Color {
 }
 
 impl<T> Node<T> {
+    fn new(value: T) -> Self {
+        Self {
+            value,
+            left: None,
+            right: None,
+            color: Color::Black,
+            rank: 1,
+        }
+    }
     // 左回転
     fn rotl(&mut self) {
         let mut right = self.right.take().unwrap();
@@ -45,6 +54,91 @@ impl<T> Node<T> {
         std::mem::swap(self, &mut *left);
         self.right = Some(left);
     }
+
+    fn merge(this: &mut Option<Box<Self>>, value: T, other: Box<Self>) {
+        if this.is_some() {
+            // if root.rank < other.rank {
+            //     let tmp = this.take().unwrap();
+            //     other.merge_rec(tmp);
+            //     *this = Some(other);
+            // } else {
+            //     root.merge_rec(other);
+            // }
+            // root.merge_rec(other);
+            let tmp = this.take().unwrap();
+            let (mut new_root, _) = tmp.merge_rec(value, other);
+            new_root.color = Color::Black;
+            *this = Some(new_root);
+        } else {
+            *this = Some(other);
+        }
+    }
+
+    fn merge_rec(mut self: Box<Self>, value: T, mut other: Box<Self>) -> (Box<Self>, bool) {
+        use std::cmp::Ordering::*;
+        match self.rank.cmp(&other.rank) {
+            Less => {
+                let (left, rr) = self.merge_rec(value, other.left.unwrap());
+                let left_color = left.color;
+                other.left = Some(left);
+                if rr {
+                    debug_assert_eq!(other.color, Color::Black);
+                    let right_color = other.right.as_ref().map_or(Color::Black, |r| r.color);
+                    if right_color == Color::Red {
+                        other.color = Color::Red;
+                        other.rank += 1;
+                        other.right.as_mut().unwrap().color = Color::Black;
+                        other.left.as_mut().unwrap().color = Color::Black;
+                        (other, false)
+                    } else {
+                        other.color = Color::Black;
+                        other.left.as_mut().unwrap().color = Color::Red;
+                        other.rotr();
+                        (other, false)
+                    }
+                } else {
+                    let flg = left_color == Color::Red && other.color == Color::Red;
+                    (other, flg)
+                }
+            }
+            Equal => {
+                assert_eq!(self.color, Color::Black);
+                assert_eq!(other.color, Color::Black);
+                let root = Box::new(Node {
+                    value,
+                    rank: self.rank + 1,
+                    left: Some(self),
+                    right: Some(other),
+                    color: Color::Red,
+                });
+                (root, false)
+            }
+            Greater => {
+                let (right, rr) = self.right.unwrap().merge_rec(value, other);
+                let right_color = right.color;
+                self.right = Some(right);
+                if rr {
+                    debug_assert_eq!(self.color, Color::Black);
+                    let left_color = self.left.as_ref().map_or(Color::Black, |l| l.color);
+                    if left_color == Color::Red {
+                        self.color = Color::Red;
+                        self.rank += 1;
+                        self.left.as_mut().unwrap().color = Color::Black;
+                        self.right.as_mut().unwrap().color = Color::Black;
+                        (self, false)
+                    } else {
+                        self.color = Color::Black;
+                        self.right.as_mut().unwrap().color = Color::Red;
+                        self.rotl();
+                        (self, false)
+                    }
+                } else {
+                    let flg = right_color == Color::Red && self.color == Color::Red;
+                    (self, flg)
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,171 +147,7 @@ enum Direction {
     Right,
 }
 
-impl<T: Ord> Node<T> {
-    fn insert(this: &mut Option<Box<Self>>, value: T) {
-        if let (Color::Red, Color::Red, _) = Self::insert_rec(this, value) {
-            this.as_mut().unwrap().color = Color::Black;
-        }
-    }
-
-    fn insert_rec(this: &mut Option<Box<Self>>, value: T) -> (Color, Color, Direction) {
-        if let Some(root) = this {
-            match value.cmp(&root.value) {
-                std::cmp::Ordering::Less => {
-                    let (col1, col2, dir) = Self::insert_rec(&mut root.left, value);
-                    if col1 == Color::Red && col2 == Color::Red {
-                        debug_assert_eq!(root.color, Color::Black);
-                        if root.right.as_ref().is_some_and(|r| r.color == Color::Red) {
-                            root.color = Color::Red;
-                            root.rank += 1;
-                            root.left.as_mut().unwrap().color = Color::Black;
-                            root.right.as_mut().unwrap().color = Color::Black;
-                            (Color::Red, Color::Black, Direction::Right)
-                        } else {
-                            if dir == Direction::Right {
-                                root.left.as_mut().unwrap().rotl();
-                            }
-                            root.rotr();
-                            debug_assert_eq!(root.color, Color::Red);
-                            root.color = Color::Black;
-                            root.right.as_mut().unwrap().color = Color::Red;
-                            (Color::Black, Color::Red, Direction::Left)
-                        }
-                    } else {
-                        (root.color, col1, Direction::Left)
-                    }
-                }
-                std::cmp::Ordering::Equal => (Color::Black, Color::Black, Direction::Left),
-                std::cmp::Ordering::Greater => {
-                    let (col1, col2, dir) = Self::insert_rec(&mut root.right, value);
-                    if col1 == Color::Red && col2 == Color::Red {
-                        debug_assert_eq!(root.color, Color::Black);
-                        if root.left.as_ref().is_some_and(|l| l.color == Color::Red) {
-                            root.color = Color::Red;
-                            root.rank += 1;
-                            root.left.as_mut().unwrap().color = Color::Black;
-                            root.right.as_mut().unwrap().color = Color::Black;
-                            (Color::Red, Color::Black, Direction::Left)
-                        } else {
-                            if dir == Direction::Left {
-                                root.right.as_mut().unwrap().rotr();
-                            }
-                            root.rotl();
-                            debug_assert_eq!(root.color, Color::Red);
-                            root.color = Color::Black;
-                            root.left.as_mut().unwrap().color = Color::Red;
-                            (Color::Black, Color::Red, Direction::Right)
-                        }
-                    } else {
-                        (root.color, col1, Direction::Right)
-                    }
-                }
-            }
-        } else {
-            *this = Some(Box::new(Node {
-                value,
-                left: None,
-                right: None,
-                color: Color::Red,
-                rank: 1,
-            }));
-            (Color::Red, Color::Black, Direction::Left)
-        }
-    }
-
-    fn remove<Q>(this: &mut Option<Box<Self>>, key: &Q) -> Option<T>
-    where
-        Q: ?Sized + Ord,
-        T: Borrow<Q>,
-    {
-        todo!()
-    }
-
-    fn remove_rec<Q>(this: &mut Option<Box<Self>>, key: &Q) -> Option<T>
-    where
-        Q: ?Sized + Ord,
-        T: Borrow<Q>,
-    {
-        if let Some(root) = this {
-            match key.cmp(root.value.borrow()) {
-                std::cmp::Ordering::Less => {
-                    let value = Self::remove_rec(&mut root.left, key);
-                    if value.is_some() {
-                        todo!()
-                    } else {
-                        todo!()
-                    }
-                }
-                std::cmp::Ordering::Equal => {
-                    if let Some(m) = Self::remove_min(&mut root.right) {
-                        // Some(std::mem::replace(&mut root.value, m))
-                        todo!()
-                    } else {
-                        todo!()
-                    }
-                }
-                std::cmp::Ordering::Greater => {
-                    let value = Self::remove_rec(&mut root.right, key);
-                    if value.is_some() {
-                        todo!()
-                    } else {
-                        todo!()
-                    }
-                }
-            }
-        } else {
-            None
-        }
-    }
-
-    fn remove_min(this: &mut Option<Box<Self>>) -> Option<(T, bool)> {
-        if let Some(root) = this {
-            if let Some((value, flg)) = Self::remove_min(&mut root.left) {
-                if flg {
-                    let root = if root.right.as_ref().is_some_and(|r| r.color == Color::Red) {
-                        root.right.as_mut().unwrap().color = Color::Black;
-                        debug_assert_eq!(root.color, Color::Black);
-                        root.color = Color::Red;
-                        root.rotl();
-                        root.left.as_mut().unwrap()
-                    } else if root.color == Color::Red
-                        && root.right.as_ref().is_some_and(|r| {
-                            !r.left.as_ref().is_some_and(|l| l.color == Color::Red)
-                                && !r.right.as_ref().is_some_and(|r| r.color == Color::Red)
-                        })
-                    {
-                        root.right.as_mut().unwrap().color = Color::Red;
-                        root.rank -= 1;
-                        return Some((value, true));
-                    } else {
-                        root
-                    };
-                    
-                    todo!()
-                } else {
-                    Some((value, false))
-                }
-                // drop(root);
-            } else {
-                let right = root.right.take();
-                if root.color == Color::Black {
-                    let value = std::mem::replace(this, right).unwrap().value;
-                    if this.as_ref().is_some_and(|r| r.color == Color::Red) {
-                        this.as_mut().unwrap().color = Color::Black;
-                        Some((value, false))
-                    } else {
-                        Some((value, true))
-                    }
-                } else {
-                    Some((std::mem::replace(this, right).unwrap().value, false))
-                }
-                // drop(root);
-            }
-        } else {
-            None
-        }
-    }
-}
+impl<T: Ord> Node<T> {}
 
 impl<T> RedBlackTree<T> {
     pub const fn new() -> Self {
@@ -227,7 +157,7 @@ impl<T> RedBlackTree<T> {
 
 impl<T: Ord> RedBlackTree<T> {
     pub fn insert(&mut self, value: T) {
-        Node::insert(&mut self.root, value);
+        todo!()
     }
 
     pub fn get<Q>(&self, key: &Q) -> Option<&T>
@@ -257,36 +187,47 @@ impl<T> Default for RedBlackTree<T> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn insert_test() {
-        let mut tree = RedBlackTree::new();
-        tree.insert(3);
-        tree.insert(2);
-        tree.insert(10);
-        tree.insert(1);
-        tree.insert(4);
-        tree.insert(5);
-        tree.insert(6);
-        tree.insert(14);
-        tree.insert(13);
-        tree.insert(13);
-        tree.insert(13);
-        tree.insert(14);
+    // #[test]
+    // fn insert_test() {
+    //     let mut tree = RedBlackTree::new();
+    //     tree.insert(3);
+    //     tree.insert(2);
+    //     tree.insert(10);
+    //     tree.insert(1);
+    //     tree.insert(4);
+    //     tree.insert(5);
+    //     tree.insert(6);
+    //     tree.insert(14);
+    //     tree.insert(13);
+    //     tree.insert(13);
+    //     tree.insert(13);
+    //     tree.insert(14);
 
-        assert_eq!(tree.get(&1), Some(&1));
-        assert_eq!(tree.get(&2), Some(&2));
-        assert_eq!(tree.get(&3), Some(&3));
-        assert_eq!(tree.get(&4), Some(&4));
-        assert_eq!(tree.get(&5), Some(&5));
-        assert_eq!(tree.get(&6), Some(&6));
-        assert_eq!(tree.get(&7), None);
-        assert_eq!(tree.get(&8), None);
-        assert_eq!(tree.get(&9), None);
-        assert_eq!(tree.get(&10), Some(&10));
-        assert_eq!(tree.get(&11), None);
-        assert_eq!(tree.get(&12), None);
-        assert_eq!(tree.get(&13), Some(&13));
-        assert_eq!(tree.get(&14), Some(&14));
-        assert_eq!(tree.get(&15), None);
+    //     assert_eq!(tree.get(&1), Some(&1));
+    //     assert_eq!(tree.get(&2), Some(&2));
+    //     assert_eq!(tree.get(&3), Some(&3));
+    //     assert_eq!(tree.get(&4), Some(&4));
+    //     assert_eq!(tree.get(&5), Some(&5));
+    //     assert_eq!(tree.get(&6), Some(&6));
+    //     assert_eq!(tree.get(&7), None);
+    //     assert_eq!(tree.get(&8), None);
+    //     assert_eq!(tree.get(&9), None);
+    //     assert_eq!(tree.get(&10), Some(&10));
+    //     assert_eq!(tree.get(&11), None);
+    //     assert_eq!(tree.get(&12), None);
+    //     assert_eq!(tree.get(&13), Some(&13));
+    //     assert_eq!(tree.get(&14), Some(&14));
+    //     assert_eq!(tree.get(&15), None);
+    // }
+
+    #[test]
+    fn merge_test() {
+        let mut node1 = Some(Box::new(Node::new(1)));
+        let node2 = Box::new(Node::new(2));
+        Node::merge(&mut node1, 3, node2);
+        println!("{:?}", node1.as_ref().unwrap());
+        let mut node = None;
+        Node::merge(&mut node, 10, node1.unwrap());
+        println!("{:?}", node.as_ref().unwrap());
     }
 }
