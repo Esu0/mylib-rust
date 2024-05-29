@@ -1,4 +1,8 @@
-use std::{alloc::{handle_alloc_error, Layout}, cell::Cell, ptr::NonNull};
+use std::{
+    alloc::{handle_alloc_error, Layout},
+    cell::Cell,
+    ptr::NonNull,
+};
 
 use crate::MemoryPool;
 
@@ -59,6 +63,7 @@ unsafe impl MemoryPool for FixedSizeMemoryPool {
         if size == 0 {
             unsafe {
                 return Ok(NonNull::new_unchecked((usize::MAX - align + 1) as *mut u8));
+                // return Err(());
             }
         }
         assert!(align <= self.max_align);
@@ -74,5 +79,33 @@ unsafe impl MemoryPool for FixedSizeMemoryPool {
         } else {
             Err(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::alloc::Layout;
+
+    #[test]
+    fn test_allocate() {
+        let pool = FixedSizeMemoryPool::new(4096, 16);
+        let layout = Layout::new::<u32>();
+        let ptr = pool.allocate(layout);
+        unsafe {
+            ptr.cast::<u32>().as_ptr().write(42);
+            assert_eq!(ptr.cast::<u32>().as_ptr().read(), 42);
+        }
+        let addr = ptr.as_ptr() as usize;
+        assert_eq!(addr % layout.align(), 0);
+    }
+
+    #[test]
+    fn test_zero_size() {
+        let pool = FixedSizeMemoryPool::new(4096, 16);
+        let layout = Layout::new::<[usize; 0]>();
+        let ptr = pool.allocate(layout);
+        let addr = ptr.as_ptr() as usize;
+        assert_eq!(addr % layout.align(), 0);
     }
 }
