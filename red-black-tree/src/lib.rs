@@ -1,4 +1,9 @@
-use std::borrow::Borrow;
+pub mod btree;
+
+use std::{
+    borrow::Borrow,
+    fmt::{self, Display},
+};
 
 #[derive(Debug)]
 pub struct RedBlackTree<T> {
@@ -139,6 +144,19 @@ impl<T> Node<T> {
             }
         }
     }
+
+    fn fmt_rec(this: &Option<Box<Self>>, f: &mut fmt::Formatter<'_>) -> fmt::Result
+    where
+        T: Display,
+    {
+        if let Some(root) = this {
+            Self::fmt_rec(&root.left, f)?;
+            write!(f, "{}, ", root.value)?;
+            Self::fmt_rec(&root.right, f)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,6 +170,13 @@ impl<T: Ord> Node<T> {}
 impl<T> RedBlackTree<T> {
     pub const fn new() -> Self {
         Self { root: None }
+    }
+
+    fn merge(&mut self, value: T, other: Self) {
+        // TODO どちらかがNoneのとき挿入処理が必要
+        if let Some(other) = other.root {
+            Node::merge(&mut self.root, value, other);
+        }
     }
 }
 
@@ -180,6 +205,14 @@ impl<T: Ord> RedBlackTree<T> {
 impl<T> Default for RedBlackTree<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<T: Display> Display for RedBlackTree<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{{")?;
+        Node::fmt_rec(&self.root, f)?;
+        write!(f, "}}")
     }
 }
 
@@ -222,12 +255,15 @@ mod tests {
 
     #[test]
     fn merge_test() {
-        let mut node1 = Some(Box::new(Node::new(1)));
-        let node2 = Box::new(Node::new(2));
-        Node::merge(&mut node1, 3, node2);
-        println!("{:?}", node1.as_ref().unwrap());
-        let mut node = None;
-        Node::merge(&mut node, 10, node1.unwrap());
-        println!("{:?}", node.as_ref().unwrap());
+        let mut tree = RedBlackTree::new();
+        tree.merge(3, RedBlackTree::new());
+        tree.merge(2, RedBlackTree::new());
+        tree.merge(10, RedBlackTree::new());
+        let mut tree2 = RedBlackTree::new();
+        tree2.merge(1, RedBlackTree::new());
+        tree2.merge(4, RedBlackTree::new());
+        tree2.merge(5, RedBlackTree::new());
+        tree.merge(0, tree2);
+        println!("{}", tree);
     }
 }
