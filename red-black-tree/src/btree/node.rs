@@ -1,11 +1,18 @@
+#![allow(dead_code)]
 use std::{
     alloc::{self, handle_alloc_error, Layout},
     marker::PhantomData,
     mem::{size_of, MaybeUninit},
     ptr::{self, NonNull},
+    slice::SliceIndex,
 };
 
-pub const CAPACITY: usize = 3;
+const B: usize = 3;
+pub const CAPACITY: usize = 2 * B - 1;
+pub const MIN_LEN_AFTER_SPLIT: usize = B - 1;
+const KV_IDX_CENTER: usize = B - 1;
+const EDGE_IDX_LEFT_OF_CENTER: usize = B - 1;
+const EDGE_IDX_RIGHT_OF_CENTER: usize = B;
 
 struct FixedStack<T, const N: usize> {
     buf: [MaybeUninit<T>; N],
@@ -66,13 +73,56 @@ pub struct NodeRef<BorrowType, K, V, Type> {
     _marker: PhantomData<(BorrowType, Type)>,
 }
 
+pub type NodeRefMut<'a, K, V, Type> = NodeRef<marker::Mut<'a>, K, V, Type>;
+pub type NodeRefValMut<'a, K, V, Type> = NodeRef<marker::ValMut<'a>, K, V, Type>;
+pub type NodeRefOwned<K, V, Type> = NodeRef<marker::Owned, K, V, Type>;
+pub type NodeRefDying<K, V, Type> = NodeRef<marker::Dying, K, V, Type>;
+pub type NodeRefDormantMut<K, V, Type> = NodeRef<marker::DormantMut, K, V, Type>;
+pub type NodeRefImmut<'a, K, V, Type> = NodeRef<marker::Immut<'a>, K, V, Type>;
+pub type LeafNodeRef<BorrowType, K, V> = NodeRef<BorrowType, K, V, marker::Leaf>;
+pub type InternalNodeRef<BorrowType, K, V> = NodeRef<BorrowType, K, V, marker::Internal>;
+pub type LeafOrInternalNodeRef<BorrowType, K, V> =
+    NodeRef<BorrowType, K, V, marker::LeafOrInternal>;
+
 pub struct Handle<Node, Type> {
     node: Node,
     idx: usize,
     _marker: PhantomData<Type>,
 }
 
+pub type HandleEdge<Node> = Handle<Node, marker::Edge>;
+pub type HandleKV<Node> = Handle<Node, marker::KV>;
+
+impl<Node: Copy, Type> Clone for Handle<Node, Type> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<Node: Copy, Type> Copy for Handle<Node, Type> {}
+
 pub type Root<K, V> = NodeRef<marker::Owned, K, V, marker::LeafOrInternal>;
+
+pub enum ForceResult<Leaf, Internal> {
+    Leaf(Leaf),
+    Internal(Internal),
+}
+
+pub type ForceResultNodeRef<BorrowType, K, V> = ForceResult<
+    NodeRef<BorrowType, K, V, marker::Leaf>,
+    NodeRef<BorrowType, K, V, marker::Internal>,
+>;
+
+pub enum LeftOrRight<T> {
+    Left(T),
+    Right(T),
+}
+
+pub struct SplitResult<'a, K, V, NodeType> {
+    pub left: NodeRefMut<'a, K, V, NodeType>,
+    pub kv: (K, V),
+    pub right: NodeRefOwned<K, V, NodeType>,
+}
 
 impl<'a, K: 'a, V: 'a, Type> Copy for NodeRef<marker::Immut<'a>, K, V, Type> {}
 impl<'a, K: 'a, V: 'a, Type> Clone for NodeRef<marker::Immut<'a>, K, V, Type> {
@@ -87,6 +137,23 @@ unsafe impl<K: Send, V: Send, Type> Send for NodeRef<marker::Mut<'_>, K, V, Type
 unsafe impl<K: Send, V: Send, Type> Send for NodeRef<marker::ValMut<'_>, K, V, Type> {}
 unsafe impl<K: Send, V: Send, Type> Send for NodeRef<marker::Owned, K, V, Type> {}
 unsafe impl<K: Send, V: Send, Type> Send for NodeRef<marker::Dying, K, V, Type> {}
+
+/// 容量がいっぱいのノードにキーと値を挿入するときに分割ポイントと挿入位置を計算する。
+fn splitpoint(edge_idx: usize) -> (usize, LeftOrRight<usize>) {
+    debug_assert!(edge_idx <= CAPACITY);
+    if edge_idx < EDGE_IDX_LEFT_OF_CENTER {
+        (KV_IDX_CENTER - 1, LeftOrRight::Left(edge_idx))
+    } else if edge_idx == EDGE_IDX_LEFT_OF_CENTER {
+        (KV_IDX_CENTER, LeftOrRight::Left(edge_idx))
+    } else if edge_idx == EDGE_IDX_RIGHT_OF_CENTER {
+        (KV_IDX_CENTER, LeftOrRight::Right(0))
+    } else {
+        (
+            KV_IDX_CENTER + 1,
+            LeftOrRight::Right(edge_idx - (KV_IDX_CENTER + 1 + 1)),
+        )
+    }
+}
 
 impl<K, V> LeafNode<K, V> {
     /// 新しい`LeafNode`をインプレースに初期化する。
@@ -134,7 +201,7 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::Internal> {
     pub fn new_internal(child: Root<K, V>) -> Self {
         let mut new_node = unsafe { InternalNode::new() };
         new_node.edges[0].write(child.node);
-        unsafe { Self::from_new_internal(new_node, child.height + 1)}
+        unsafe { Self::from_new_internal(new_node, child.height + 1) }
     }
 
     /// # Safety
@@ -164,7 +231,7 @@ impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Internal> {
     }
 
     /// `internal node`のデータを外に公開する。
-    /// 
+    ///
     /// このノードへのほかの参照を無効化しないように、生ポインタで返す。
     fn as_internal_ptr(this: &Self) -> *mut InternalNode<K, V> {
         this.node.as_ptr() as *mut InternalNode<K, V>
@@ -172,13 +239,13 @@ impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Internal> {
 }
 
 impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
-    /// `internal node`のデータの排他的な参照を返す。
+    /// `internal node`のデータの排他的な参照を借用する。
     fn as_internal_mut(&mut self) -> &mut InternalNode<K, V> {
         unsafe { &mut *NodeRef::as_internal_ptr(self) }
     }
 }
 
-impl<BorrowType, K, V, Type> NodeRef<BorrowType, K ,V, Type> {
+impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
     /// ノードの長さを返す。これはキーと値のペアの数である。
     /// 辺の数は`len() + 1`である。
     /// この関数は安全ではあるが、unsafeなコードから生成された排他参照を無効化する
@@ -192,20 +259,28 @@ impl<BorrowType, K, V, Type> NodeRef<BorrowType, K ,V, Type> {
         self.height
     }
 
-    /// 同じノードへの一時的な共有参照を返す。
+    /// 同じノードへの一時的な不変ポインタを返す。
     pub fn reborrow(&self) -> NodeRef<marker::Immut<'_>, K, V, Type> {
-        NodeRef { height: self.height, node: self.node, _marker: PhantomData }
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
     }
 
     /// "leaf node"あるいは"internal node"のデータを外に公開する。
-    /// 
+    ///
     /// このノードへのほかの参照を無効化しないように、生ポインタで返す。
     fn as_leaf_ptr(this: &Self) -> *mut LeafNode<K, V> {
         this.node.as_ptr()
     }
 
     fn eq(&self, other: &Self) -> bool {
-        let Self { node, height, _marker } = self;
+        let Self {
+            node,
+            height,
+            _marker,
+        } = self;
         if node.eq(&other.node) {
             debug_assert_eq!(*height, other.height);
             true
@@ -216,8 +291,141 @@ impl<BorrowType, K, V, Type> NodeRef<BorrowType, K ,V, Type> {
 }
 
 impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Immut<'a>, K, V, Type> {
+    /// 不変な木の中間ノードまたは葉ノードにおける葉の部分のデータの共有参照を返す。
     fn into_leaf(self) -> &'a LeafNode<K, V> {
         unsafe { &*NodeRef::as_leaf_ptr(&self) }
+    }
+
+    /// ノードに格納されているキーのビューを提供する。
+    pub fn keys(&self) -> &[K] {
+        let leaf = self.into_leaf();
+        unsafe { &*(leaf.keys.get_unchecked(..leaf.len as usize) as *const _ as *const [K]) }
+    }
+}
+
+impl<K, V> NodeRef<marker::Dying, K, V, marker::LeafOrInternal> {
+    /// ノードが使用するメモリ領域を解放する。
+    /// 解放された後，このノードへのアクセスは未定義の動作となる。
+    pub unsafe fn deallocate(self) {
+        let height = self.height;
+        let node = self.node;
+        unsafe {
+            alloc::dealloc(
+                node.as_ptr() as *mut u8,
+                if height > 0 {
+                    Layout::new::<InternalNode<K, V>>()
+                } else {
+                    Layout::new::<LeafNode<K, V>>()
+                },
+            );
+        }
+    }
+}
+
+impl<'a, K, V, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
+    /// 同じノードへの一時的な可変ポインタを返す。
+    /// このメソッドは非常に危険である。危険が即座に現れない場合があるので注意
+    /// する必要がある。
+    ///
+    /// 可変ポインタはツリー内をどこでも移動することができる。そのため、返された
+    /// ポインタを使用して元のポインタをダングリングさせたり、境界外にさせたり、
+    /// stacked borrow ruleの違反を引き起こすことができる。
+    unsafe fn reborrow_mut(&mut self) -> NodeRef<marker::Mut<'_>, K, V, Type> {
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+
+    /// 木の中間ノードまたは葉ノードにおける葉の部分のデータの排他参照を借用する。
+    fn as_leaf_mut(&mut self) -> &mut LeafNode<K, V> {
+        unsafe { &mut *Self::as_leaf_ptr(self) }
+    }
+
+    /// 木の中間ノードまたは葉ノードにおける葉の部分のデータの排他参照を提供する。
+    fn into_leaf_mut(self) -> &'a mut LeafNode<K, V> {
+        unsafe { &mut *Self::as_leaf_ptr(&self) }
+    }
+
+    /// ライフタイムが削除された休止状態のノードを返す。
+    /// 休止状態のノードは後で再び起動できる。
+    pub fn dormant(&self) -> NodeRef<marker::DormantMut, K, V, Type> {
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
+    /// キーの格納場所への排他参照を借用して返す。
+    ///
+    /// # Safety
+    /// `index`が0..CAPACITYの範囲にあること
+    unsafe fn key_area_mut<I, Output: ?Sized>(&mut self, index: I) -> &mut Output
+    where
+        I: SliceIndex<[MaybeUninit<K>], Output = Output>,
+    {
+        unsafe {
+            self.as_leaf_mut()
+                .keys
+                .as_mut_slice()
+                .get_unchecked_mut(index)
+        }
+    }
+
+    /// 値の格納場所への排他参照を借用して返す。
+    ///
+    /// # Safety
+    /// `index`が0..CAPACITYの範囲にあること
+    unsafe fn val_area_mut<I, Output: ?Sized>(&mut self, index: I) -> &mut Output
+    where
+        I: SliceIndex<[MaybeUninit<V>], Output = Output>,
+    {
+        unsafe {
+            self.as_leaf_mut()
+                .vals
+                .as_mut_slice()
+                .get_unchecked_mut(index)
+        }
+    }
+
+    /// ノードの長さへの排他参照を借用して返す。
+    pub fn len_mut(&mut self) -> &mut u8 {
+        &mut self.as_leaf_mut().len
+    }
+}
+
+impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
+    /// 辺の格納場所への排他参照を借用して返す。
+    ///
+    /// # Safety
+    /// `index`が0..CAPACITY + 1の範囲にあること
+    unsafe fn edge_area_mut<I, Output: ?Sized>(&mut self, index: I) -> &mut Output
+    where
+        I: SliceIndex<[MaybeUninit<BoxedNode<K, V>>], Output = Output>,
+    {
+        unsafe {
+            self.as_internal_mut()
+                .edges
+                .as_mut_slice()
+                .get_unchecked_mut(index)
+        }
+    }
+}
+
+impl<'a, K, V, Type> NodeRef<marker::ValMut<'a>, K, V, Type> {
+    /// # Safety
+    /// ノードが`idx`個以上の初期化された要素を持つこと
+    unsafe fn into_key_val_mut_at(self, idx: usize) -> (&'a K, &'a mut V) {
+        let leaf = Self::as_leaf_ptr(&self);
+        let keys_head = unsafe { ptr::addr_of!((*leaf).keys) as *const MaybeUninit<K> };
+        let vals_head = unsafe { ptr::addr_of_mut!((*leaf).vals) as *mut MaybeUninit<V> };
+        let key = unsafe { (*keys_head.add(idx)).assume_init_ref() };
+        let val = unsafe { (*vals_head.add(idx)).assume_init_mut() };
+        (key, val)
     }
 }
 
@@ -237,7 +445,7 @@ impl<BorrowType: marker::BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type>
         assert!(len > 0);
         unsafe { Handle::new_kv(self, 0) }
     }
-    
+
     /// `self`の長さが0であるとき、panicすることに注意
     pub fn last_kv(self) -> Handle<Self, marker::KV> {
         let len = self.len();
@@ -246,7 +454,197 @@ impl<BorrowType: marker::BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type>
     }
 }
 
-impl<BorrowType, K, V, NodeType> Handle<NodeRef<BorrowType, K, V, NodeType>, marker::Edge> {
+impl<K, V, Type> NodeRef<marker::DormantMut, K, V, Type> {
+    /// 最初にキャプチャしたユニークな借用に戻す。
+    ///
+    /// # Safety
+    ///
+    /// reborrowが終了している必要がある。すなわち、`new`によって返された参照と
+    /// そこから派生したすべてのポインタはこれ以上使ってはならない。
+    pub unsafe fn awaken<'a>(self) -> NodeRef<marker::Mut<'a>, K, V, Type> {
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<K, V, Type> NodeRef<marker::Dying, K, V, Type> {
+    /// 死んだ葉または中間ノードの葉ノードの部分の排他参照を借用して返す。
+    fn as_leaf_dying(&mut self) -> &mut LeafNode<K, V> {
+        unsafe { &mut *Self::as_leaf_ptr(self) }
+    }
+}
+
+impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Leaf> {
+    /// このノードが葉ノードであるという静的な情報を削除する。
+    pub fn forget_type(self) -> NodeRef<BorrowType, K, V, marker::LeafOrInternal> {
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Internal> {
+    /// このノードが中間ノードであるという静的な情報を削除する。
+    pub fn forget_type(self) -> NodeRef<BorrowType, K, V, marker::LeafOrInternal> {
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<BorrowType, K, V> LeafOrInternalNodeRef<BorrowType, K, V> {
+    pub fn force(self) -> ForceResultNodeRef<BorrowType, K, V> {
+        if self.height == 0 {
+            ForceResult::Leaf(NodeRef {
+                height: self.height,
+                node: self.node,
+                _marker: PhantomData,
+            })
+        } else {
+            ForceResult::Internal(NodeRef {
+                height: self.height,
+                node: self.node,
+                _marker: PhantomData,
+            })
+        }
+    }
+}
+
+impl<K, V> LeafOrInternalNodeRef<marker::Owned, K, V> {
+    /// 新しい所有された木を返す。
+    pub fn new() -> Self {
+        NodeRef::new_leaf().forget_type()
+    }
+
+    /// 以前のルートノードへの辺のみをもつ新しい中間ノードを追加し、それを
+    /// ルートノードにして返す。これにより、高さが1増加する。
+    pub fn push_internal_level(&mut self) -> NodeRef<marker::Mut<'_>, K, V, marker::Internal> {
+        super::mem::take_mut(self, |old_root| {
+            NodeRef::new_internal(old_root).forget_type()
+        });
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<K, V, Type> NodeRefOwned<K, V, Type> {
+    pub fn borrow_mut(&mut self) -> NodeRefMut<'_, K, V, Type> {
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn borrow_valmut(&mut self) -> NodeRefValMut<'_, K, V, Type> {
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn into_dying(self) -> NodeRefDying<K, V, Type> {
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a, K: 'a, V: 'a> NodeRefMut<'a, K, V, marker::Leaf> {
+    /// キーと値のペアをノードの最後に追加する。追加したペアのハンドルを返す。
+    ///
+    /// # Safety
+    /// 返されたハンドルのライフタイムが境界を超えないこと
+    pub unsafe fn push_with_handle<'b>(
+        &mut self,
+        key: K,
+        val: V,
+    ) -> Handle<NodeRefMut<'b, K, V, marker::Leaf>, marker::KV> {
+        let len = self.len_mut();
+        let idx = *len as usize;
+        assert!(idx < CAPACITY);
+        *len += 1;
+        unsafe {
+            self.key_area_mut(idx).write(key);
+            self.val_area_mut(idx).write(val);
+            Handle::new_kv(
+                NodeRef {
+                    height: self.height,
+                    node: self.node,
+                    _marker: PhantomData,
+                },
+                idx,
+            )
+        }
+    }
+
+    /// [`push_with_handle`](Self::push_with_handle)と機能は同じ
+    pub fn push(&mut self, key: K, val: V) -> *mut V {
+        unsafe { self.push_with_handle(key, val).into_val_mut() }
+    }
+}
+
+impl<'a, K: 'a, V: 'a> NodeRefMut<'a, K, V, marker::Internal> {
+    /// キーと値のペアをノードの最後に追加し、その右の辺を追加する。
+    pub fn push(&mut self, key: K, val: V, edge: Root<K, V>) {
+        assert!(edge.height == self.height - 1);
+
+        let len = self.len_mut();
+        let idx = *len as usize;
+        assert!(idx < CAPACITY);
+        *len += 1;
+        unsafe {
+            self.key_area_mut(idx).write(key);
+            self.val_area_mut(idx).write(val);
+            self.edge_area_mut(idx + 1).write(edge.node);
+        }
+    }
+}
+
+impl<'a, K, V> NodeRefMut<'a, K, V, marker::LeafOrInternal> {
+    unsafe fn cast_to_leaf_unchecked(self) -> NodeRefMut<'a, K, V, marker::Leaf> {
+        debug_assert!(self.height == 0);
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+
+    unsafe fn cast_to_internal_unchecked(self) -> NodeRefMut<'a, K, V, marker::Internal> {
+        debug_assert!(self.height > 0);
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<Node, Type> Handle<Node, Type> {
+    pub fn into_node(self) -> Node {
+        self.node
+    }
+
+    pub fn idx(&self) -> usize {
+        self.idx
+    }
+}
+
+impl<BorrowType, K, V, NodeType> HandleEdge<NodeRef<BorrowType, K, V, NodeType>> {
     /// edgeに対する新しいhandleを作成する。
     /// 呼び出し側は`idx <= node.len()`であることを保証しなければならない。
     pub unsafe fn new_edge(node: NodeRef<BorrowType, K, V, NodeType>, idx: usize) -> Self {
@@ -257,15 +655,263 @@ impl<BorrowType, K, V, NodeType> Handle<NodeRef<BorrowType, K, V, NodeType>, mar
             _marker: PhantomData,
         }
     }
+
+    pub fn left_kv(self) -> Result<HandleKV<NodeRef<BorrowType, K, V, NodeType>>, Self> {
+        if self.idx > 0 {
+            Ok(unsafe { Handle::new_kv(self.node, self.idx - 1) })
+        } else {
+            Err(self)
+        }
+    }
+
+    pub fn right_kv(self) -> Result<HandleKV<NodeRef<BorrowType, K, V, NodeType>>, Self> {
+        if self.idx < self.node.len() {
+            Ok(unsafe { Handle::new_kv(self.node, self.idx) })
+        } else {
+            Err(self)
+        }
+    }
 }
 
-impl<BorrowType, K, V, NodeType> Handle<NodeRef<BorrowType, K, V, NodeType>, marker::KV> {
+impl<BorrowType, K, V, NodeType> HandleKV<NodeRef<BorrowType, K, V, NodeType>> {
     pub unsafe fn new_kv(node: NodeRef<BorrowType, K, V, NodeType>, idx: usize) -> Self {
         debug_assert!(idx < node.len());
         Handle {
             node,
             idx,
             _marker: PhantomData,
+        }
+    }
+
+    pub fn left_edge(self) -> HandleEdge<NodeRef<BorrowType, K, V, NodeType>> {
+        unsafe { Handle::new_edge(self.node, self.idx) }
+    }
+
+    pub fn right_edge(self) -> HandleEdge<NodeRef<BorrowType, K, V, NodeType>> {
+        unsafe { Handle::new_edge(self.node, self.idx + 1) }
+    }
+}
+
+impl<BorrowType, K, V, NodeType, HandleType> PartialEq
+    for Handle<NodeRef<BorrowType, K, V, NodeType>, HandleType>
+{
+    fn eq(&self, other: &Self) -> bool {
+        let Self { node, idx, _marker } = self;
+        node.eq(&other.node) && *idx == other.idx
+    }
+}
+
+impl<'a, K: 'a, V: 'a, NodeType> HandleKV<NodeRef<marker::Mut<'a>, K, V, NodeType>> {
+    pub fn key_mut(&mut self) -> &mut K {
+        unsafe { self.node.key_area_mut(self.idx).assume_init_mut() }
+    }
+
+    pub fn into_val_mut(self) -> &'a mut V {
+        debug_assert!(self.idx < self.node.len());
+        let leaf = self.node.into_leaf_mut();
+        unsafe { leaf.vals.get_unchecked_mut(self.idx).assume_init_mut() }
+    }
+
+    pub fn into_kv_mut(self) -> (&'a mut K, &'a mut V) {
+        debug_assert!(self.idx < self.node.len());
+        let leaf = self.node.into_leaf_mut();
+        let k = unsafe { leaf.keys.get_unchecked_mut(self.idx).assume_init_mut() };
+        let v = unsafe { leaf.vals.get_unchecked_mut(self.idx).assume_init_mut() };
+        (k, v)
+    }
+}
+
+impl<BorrowType, K, V, NodeType, HandleType>
+    Handle<NodeRef<BorrowType, K, V, NodeType>, HandleType>
+{
+    pub fn reborrow(&self) -> Handle<NodeRef<marker::Immut<'_>, K, V, NodeType>, HandleType> {
+        Handle {
+            node: self.node.reborrow(),
+            idx: self.idx,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a, K, V, NodeType, HandleType> Handle<NodeRefMut<'a, K, V, NodeType>, HandleType> {
+    pub unsafe fn reborrow_mut(&mut self) -> Handle<NodeRefMut<'_, K, V, NodeType>, HandleType> {
+        Handle {
+            node: self.node.reborrow_mut(),
+            idx: self.idx,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn dormant(&self) -> Handle<NodeRefDormantMut<K, V, NodeType>, HandleType> {
+        Handle {
+            node: self.node.dormant(),
+            idx: self.idx,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<K, V, NodeType, HandleType> Handle<NodeRefDormantMut<K, V, NodeType>, HandleType> {
+    pub unsafe fn awaken<'a>(self) -> Handle<NodeRefMut<'a, K, V, NodeType>, HandleType> {
+        Handle {
+            node: self.node.awaken(),
+            idx: self.idx,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a, K: 'a, V: 'a> HandleEdge<NodeRefMut<'a, K, V, marker::Leaf>> {
+    unsafe fn insert_fit(mut self, key: K, val: V) -> HandleKV<NodeRefMut<'a, K, V, marker::Leaf>> {
+        debug_assert!(self.node.len() < CAPACITY);
+        let new_len = self.node.len() + 1;
+
+        unsafe {
+            slice_insert(self.node.key_area_mut(..new_len), self.idx, key);
+            slice_insert(self.node.val_area_mut(..new_len), self.idx, val);
+            *self.node.len_mut() = new_len as u8;
+
+            Handle::new_kv(self.node, self.idx)
+        }
+    }
+}
+
+impl<'a, K: 'a, V: 'a> HandleEdge<NodeRefMut<'a, K, V, marker::Leaf>> {
+    #[allow(clippy::type_complexity)]
+    fn insert(
+        self,
+        key: K,
+        val: V,
+    ) -> (
+        Option<SplitResult<'a, K, V, marker::Leaf>>,
+        HandleKV<NodeRefDormantMut<K, V, marker::Leaf>>,
+    ) {
+        if self.node.len() < CAPACITY {
+            let handle = unsafe { self.insert_fit(key, val) };
+            (None, handle.dormant())
+        } else {
+            let (middle_kv_idx, insertion) = splitpoint(self.idx);
+            let middle = unsafe { Handle::new_kv(self.node, middle_kv_idx) };
+            let mut result = middle.split();
+            let insertion_edge = match insertion {
+                LeftOrRight::Left(insert_idx) => unsafe {
+                    Handle::new_edge(result.left.reborrow_mut(), insert_idx)
+                },
+                LeftOrRight::Right(insert_idx) => unsafe {
+                    Handle::new_edge(result.right.borrow_mut(), insert_idx)
+                }
+            };
+            let handle = unsafe { insertion_edge.insert_fit(key, val).dormant() };
+            (Some(result), handle)
+        }
+    }
+}
+
+impl<'a, K: 'a, V: 'a> HandleEdge<NodeRefMut<'a, K, V, marker::Internal>> {
+    fn insert_fit(&mut self, key: K, val: V, edge: Root<K, V>) {
+        debug_assert!(self.node.len() < CAPACITY);
+        debug_assert!(edge.height == self.node.height - 1);
+        let new_len = self.node.len() + 1;
+
+        unsafe {
+            slice_insert(self.node.key_area_mut(..new_len), self.idx, key);
+            slice_insert(self.node.val_area_mut(..new_len), self.idx, val);
+            slice_insert(self.node.edge_area_mut(..new_len + 1), self.idx + 1, edge.node);
+            *self.node.len_mut() = new_len as u8;
+        }
+    }
+
+    fn insert(mut self, key: K, val: V, edge: Root<K, V>) -> Option<SplitResult<'a, K, V, marker::Internal>> {
+        assert!(edge.height == self.node.height - 1);
+
+        if self.node.len() < CAPACITY {
+            self.insert_fit(key, val, edge);
+            None
+        } else {
+            let (middle_kv_idx, insertion) = splitpoint(self.idx);
+            let middle = unsafe { Handle::new_kv(self.node, middle_kv_idx) };
+            let mut result = middle.split();
+            let mut insertion_edge = match insertion {
+                LeftOrRight::Left(insert_idx) => unsafe {
+                    Handle::new_edge(result.left.reborrow_mut(), insert_idx)
+                }
+                LeftOrRight::Right(insert_idx) => unsafe {
+                    Handle::new_edge(result.right.borrow_mut(), insert_idx)
+                }
+            };
+            insertion_edge.insert_fit(key, val, edge);
+            Some(result)
+        }
+    }
+}
+
+impl<'a, K: 'a, V: 'a> HandleKV<NodeRefMut<'a, K, V, marker::Leaf>> {
+    pub fn split(mut self) -> SplitResult<'a, K, V, marker::Leaf> {
+        let mut new_node = LeafNode::new();
+        let kv = self.split_leaf_data(&mut new_node);
+        SplitResult {
+            left: self.node,
+            kv,
+            right: NodeRef::from_new_leaf(new_node),
+        }
+    }
+
+    /// ハンドルが指すキーと値をノードから削除してそれと左のエッジのハンドルを返す。
+    #[allow(clippy::type_complexity)]
+    pub fn remove(mut self) -> ((K, V), HandleEdge<NodeRefMut<'a, K, V, marker::Leaf>>) {
+        let old_len = self.node.len();
+        unsafe {
+            let k = slice_remove(self.node.key_area_mut(..old_len), self.idx);
+            let v = slice_remove(self.node.val_area_mut(..old_len), self.idx);
+            *self.node.len_mut() = (old_len - 1) as u8;
+            ((k, v), self.left_edge())
+        }
+    }
+}
+
+impl<'a, K: 'a, V: 'a> HandleKV<NodeRefMut<'a, K, V, marker::Internal>> {
+    pub fn split(mut self) -> SplitResult<'a, K, V, marker::Internal> {
+        let old_len = self.node.len();
+        unsafe {
+            let mut new_node = InternalNode::new();
+            let kv = self.split_leaf_data(&mut new_node.data);
+            let new_len = new_node.data.len as usize;
+            move_to_slice(
+                self.node.edge_area_mut(self.idx + 1..old_len + 1),
+                &mut new_node.edges[..new_len + 1],
+            );
+
+            let height = self.node.height;
+            let right = NodeRef::from_new_internal(new_node, height);
+            SplitResult {
+                left: self.node,
+                kv,
+                right,
+            }
+        }
+    }
+}
+impl<'a, K: 'a, V: 'a, NodeType> HandleKV<NodeRefMut<'a, K, V, NodeType>> {
+    fn split_leaf_data(&mut self, new_node: &mut LeafNode<K, V>) -> (K, V) {
+        debug_assert!(self.idx < self.node.len());
+        let old_len = self.node.len();
+        let new_len = old_len - self.idx - 1;
+        new_node.len = new_len as u8;
+        unsafe {
+            let k = self.node.key_area_mut(self.idx).assume_init_read();
+            let v = self.node.val_area_mut(self.idx).assume_init_read();
+
+            move_to_slice(
+                self.node.key_area_mut(self.idx + 1..old_len),
+                &mut new_node.keys[..new_len],
+            );
+            move_to_slice(
+                self.node.val_area_mut(self.idx + 1..old_len),
+                &mut new_node.vals[..new_len],
+            );
+
+            *self.node.len_mut() = self.idx as u8;
+            (k, v)
         }
     }
 }
