@@ -1,19 +1,20 @@
+#![allow(unused_variables)]
+#![allow(unused)]
 use std::borrow::Borrow;
 
-use node::Root;
+use super::node::Root;
 
-pub struct BTree<K, V> {
+pub struct PersistentBTree<K, V> {
     root: Option<Root<K, V>>,
 }
 
-impl<K, V> BTree<K, V> {
+impl<K, V> PersistentBTree<K, V> {
     pub const fn new() -> Self {
         Self { root: None }
     }
 }
 
-#[allow(unused_variables)]
-impl<K: Ord, V> BTree<K, V> {
+impl<K: Ord, V> PersistentBTree<K, V> {
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -22,17 +23,13 @@ impl<K: Ord, V> BTree<K, V> {
         todo!()
     }
 
-    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+    pub fn insert(&self, key: K, value: V) -> Self {
         todo!()
     }
 }
 
-impl<K, V> Default for BTree<K, V> {
+impl<K, V> Default for PersistentBTree<K, V> {
     fn default() -> Self {
         Self::new()
     }
 }
-
-mod mem;
-mod node;
-pub mod persistent;
