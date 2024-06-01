@@ -7,6 +7,8 @@ use std::{
     slice::SliceIndex,
 };
 
+use super::alloc::Allocator;
+
 const B: usize = 3;
 pub const CAPACITY: usize = 2 * B - 1;
 pub const MIN_LEN_AFTER_SPLIT: usize = B - 1;
@@ -166,11 +168,11 @@ impl<K, V> LeafNode<K, V> {
         ptr::addr_of_mut!((*this).len).write(0);
     }
 
-    fn new() -> Box<Self> {
+    fn new<'a, A: Allocator<Self> + 'a>(alloc: A) -> &'a mut Self {
         unsafe {
-            let mut leaf = new_uninit_box();
-            LeafNode::init(leaf.as_mut_ptr());
-            assume_init_box(leaf)
+            let leaf = alloc.allocate();
+            LeafNode::init(leaf.as_ptr());
+            &mut *leaf.as_ptr()
         }
     }
 }
@@ -181,39 +183,45 @@ impl<K, V> InternalNode<K, V> {
     /// # Safety
     /// "internal node"の不変条件として、少なくとも一つの有効な辺を持つという
     /// ものがある。この関数はそのような辺のセットアップをしないことに注意する。
-    unsafe fn new() -> Box<Self> {
-        let mut node = new_uninit_box::<Self>();
-        LeafNode::init(ptr::addr_of_mut!((*node.as_mut_ptr()).data));
-        assume_init_box(node)
+    unsafe fn new<'a, A: Allocator<Self> + 'a>(alloc: A) -> &'a mut Self {
+        let node = alloc.allocate();
+        LeafNode::init(ptr::addr_of_mut!((*node.as_ptr()).data));
+        &mut *node.as_ptr()
     }
 }
 
 impl<K, V> NodeRef<marker::Owned, K, V, marker::Leaf> {
-    pub fn new_leaf() -> Self {
-        Self::from_new_leaf(LeafNode::new())
+    pub fn new_leaf<A>(alloc: A) -> Self
+    where
+        A: Allocator<LeafNode<K, V>>,
+    {
+        Self::from_new_leaf(LeafNode::new(alloc))
     }
 
-    fn from_new_leaf(leaf: Box<LeafNode<K, V>>) -> Self {
+    fn from_new_leaf(leaf: &mut LeafNode<K, V>) -> Self {
         NodeRef {
             height: 0,
-            node: Box::leak(leaf).into(),
+            node: leaf.into(),
             _marker: PhantomData,
         }
     }
 }
 
 impl<K, V> NodeRef<marker::Owned, K, V, marker::Internal> {
-    pub fn new_internal(child: Root<K, V>) -> Self {
-        let mut new_node = unsafe { InternalNode::new() };
+    pub fn new_internal<A>(child: Root<K, V>, alloc: A) -> Self
+    where
+        A: Allocator<InternalNode<K, V>>,
+    {
+        let new_node = unsafe { InternalNode::new(alloc) };
         new_node.edges[0].write(child.node);
         unsafe { Self::from_new_internal(new_node, child.height + 1) }
     }
 
     /// # Safety
     /// `height`は0より大きい
-    unsafe fn from_new_internal(internal: Box<InternalNode<K, V>>, height: usize) -> Self {
+    unsafe fn from_new_internal(internal: &mut InternalNode<K, V>, height: usize) -> Self {
         debug_assert!(height > 0);
-        let node = NonNull::from(Box::leak(internal)).cast();
+        let node = NonNull::from(internal).cast();
         NodeRef {
             height,
             node,
@@ -311,18 +319,18 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Immut<'a>, K, V, Type> {
 impl<K, V> NodeRef<marker::Dying, K, V, marker::LeafOrInternal> {
     /// ノードが使用するメモリ領域を解放する。
     /// 解放された後，このノードへのアクセスは未定義の動作となる。
-    pub unsafe fn deallocate(self) {
+    pub unsafe fn deallocate<A>(self, alloc: A)
+    where
+        A: Allocator<LeafNode<K, V>> + Allocator<InternalNode<K, V>>,
+    {
         let height = self.height;
         let node = self.node;
         unsafe {
-            alloc::dealloc(
-                node.as_ptr() as *mut u8,
-                if height > 0 {
-                    Layout::new::<InternalNode<K, V>>()
-                } else {
-                    Layout::new::<LeafNode<K, V>>()
-                },
-            );
+            if height > 0 {
+                Allocator::<InternalNode<K, V>>::deallocate(&alloc, node.cast());
+            } else {
+                Allocator::<LeafNode<K, V>>::deallocate(&alloc, node.cast());
+            }
         }
     }
 }
@@ -524,15 +532,21 @@ impl<BorrowType, K, V> LeafOrInternalNodeRef<BorrowType, K, V> {
 
 impl<K, V> LeafOrInternalNodeRef<marker::Owned, K, V> {
     /// 新しい所有された木を返す。
-    pub fn new() -> Self {
-        NodeRef::new_leaf().forget_type()
+    pub fn new<A>(alloc: A) -> Self
+    where
+        A: Allocator<LeafNode<K, V>>,
+    {
+        NodeRef::new_leaf(alloc).forget_type()
     }
 
     /// 以前のルートノードへの辺のみをもつ新しい中間ノードを追加し、それを
     /// ルートノードにして返す。これにより、高さが1増加する。
-    pub fn push_internal_level(&mut self) -> NodeRef<marker::Mut<'_>, K, V, marker::Internal> {
+    pub fn push_internal_level<A>(&mut self, alloc: A) -> NodeRef<marker::Mut<'_>, K, V, marker::Internal>
+    where
+        A: Allocator<InternalNode<K, V>>,
+    {
         super::mem::take_mut(self, |old_root| {
-            NodeRef::new_internal(old_root).forget_type()
+            NodeRef::new_internal(old_root, alloc).forget_type()
         });
         NodeRef {
             height: self.height,
@@ -715,6 +729,7 @@ impl<'a, K: 'a, V: 'a, NodeType> HandleKV<NodeRefImmut<'a, K, V, NodeType>> {
         (k, v)
     }
 }
+
 impl<'a, K: 'a, V: 'a, NodeType> HandleKV<NodeRef<marker::Mut<'a>, K, V, NodeType>> {
     pub fn key_mut(&mut self) -> &mut K {
         unsafe { self.node.key_area_mut(self.idx).assume_init_mut() }
@@ -841,21 +856,25 @@ impl<'a, K: 'a, V: 'a> HandleEdge<NodeRefMut<'a, K, V, marker::Leaf>> {
 
 impl<'a, K: 'a, V: 'a> HandleEdge<NodeRefMut<'a, K, V, marker::Leaf>> {
     #[allow(clippy::type_complexity)]
-    fn insert(
+    fn insert<A>(
         self,
         key: K,
         val: V,
+        alloc: A,
     ) -> (
         Option<SplitResult<'a, K, V, marker::Leaf>>,
         HandleKV<NodeRefDormantMut<K, V, marker::Leaf>>,
-    ) {
+    )
+    where
+        A: Allocator<LeafNode<K, V>>,
+    {
         if self.node.len() < CAPACITY {
             let handle = unsafe { self.insert_fit(key, val) };
             (None, handle.dormant())
         } else {
             let (middle_kv_idx, insertion) = splitpoint(self.idx);
             let middle = unsafe { Handle::new_kv(self.node, middle_kv_idx) };
-            let mut result = middle.split();
+            let mut result = middle.split(alloc);
             let insertion_edge = match insertion {
                 LeftOrRight::Left(insert_idx) => unsafe {
                     Handle::new_edge(result.left.reborrow_mut(), insert_idx)
@@ -888,12 +907,16 @@ impl<'a, K: 'a, V: 'a> HandleEdge<NodeRefMut<'a, K, V, marker::Internal>> {
         }
     }
 
-    fn insert(
+    fn insert<A>(
         mut self,
         key: K,
         val: V,
         edge: Root<K, V>,
-    ) -> Option<SplitResult<'a, K, V, marker::Internal>> {
+        alloc: A,
+    ) -> Option<SplitResult<'a, K, V, marker::Internal>>
+    where
+        A: Allocator<InternalNode<K, V>>,
+    {
         assert!(edge.height == self.node.height - 1);
 
         if self.node.len() < CAPACITY {
@@ -902,7 +925,7 @@ impl<'a, K: 'a, V: 'a> HandleEdge<NodeRefMut<'a, K, V, marker::Internal>> {
         } else {
             let (middle_kv_idx, insertion) = splitpoint(self.idx);
             let middle = unsafe { Handle::new_kv(self.node, middle_kv_idx) };
-            let mut result = middle.split();
+            let mut result = middle.split(alloc);
             let mut insertion_edge = match insertion {
                 LeftOrRight::Left(insert_idx) => unsafe {
                     Handle::new_edge(result.left.reborrow_mut(), insert_idx)
@@ -918,9 +941,12 @@ impl<'a, K: 'a, V: 'a> HandleEdge<NodeRefMut<'a, K, V, marker::Internal>> {
 }
 
 impl<'a, K: 'a, V: 'a> HandleKV<NodeRefMut<'a, K, V, marker::Leaf>> {
-    pub fn split(mut self) -> SplitResult<'a, K, V, marker::Leaf> {
-        let mut new_node = LeafNode::new();
-        let kv = self.split_leaf_data(&mut new_node);
+    pub fn split<A>(mut self, alloc: A) -> SplitResult<'a, K, V, marker::Leaf>
+    where
+        A: Allocator<LeafNode<K, V>>,
+    {
+        let new_node = LeafNode::new(alloc);
+        let kv = self.split_leaf_data(&mut *new_node);
         SplitResult {
             left: self.node,
             kv,
@@ -942,10 +968,13 @@ impl<'a, K: 'a, V: 'a> HandleKV<NodeRefMut<'a, K, V, marker::Leaf>> {
 }
 
 impl<'a, K: 'a, V: 'a> HandleKV<NodeRefMut<'a, K, V, marker::Internal>> {
-    pub fn split(mut self) -> SplitResult<'a, K, V, marker::Internal> {
+    pub fn split<A>(mut self, alloc: A) -> SplitResult<'a, K, V, marker::Internal>
+    where
+        A: Allocator<InternalNode<K, V>>,
+    {
         let old_len = self.node.len();
         unsafe {
-            let mut new_node = InternalNode::new();
+            let new_node = InternalNode::new(alloc);
             let kv = self.split_leaf_data(&mut new_node.data);
             let new_len = new_node.data.len as usize;
             move_to_slice(
@@ -1045,17 +1074,19 @@ impl<BorrowType, K, V, Type> Handle<LeafOrInternalNodeRef<BorrowType, K, V>, Typ
 
 #[cfg(test)]
 mod tests {
+    use crate::btree::alloc::GlobalAlloc;
+
     use super::*;
 
     #[test]
     fn insert_into_leaf() {
-        let mut node = NodeRef::<_, usize, (), _>::new_leaf();
+        let mut node = NodeRef::<_, usize, (), _>::new_leaf(GlobalAlloc);
         for i in 0..CAPACITY {
             let handle = node.borrow_mut().last_edge();
-            let result = handle.insert(i, ());
+            let result = handle.insert(i, (), GlobalAlloc);
             assert!(result.0.is_none());
         }
-        let result = node.borrow_mut().last_edge().insert(CAPACITY, ());
+        let result = node.borrow_mut().last_edge().insert(CAPACITY, (), GlobalAlloc);
         let mut split_result = result.0.unwrap();
         println!("middle: {:?}", split_result.kv.0);
         println!(
@@ -1068,8 +1099,8 @@ mod tests {
         );
         let right = split_result.right;
         unsafe {
-            node.into_dying().forget_type().deallocate();
-            right.into_dying().forget_type().deallocate();
+            node.into_dying().forget_type().deallocate(GlobalAlloc);
+            right.into_dying().forget_type().deallocate(GlobalAlloc);
         }
     }
 }

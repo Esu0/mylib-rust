@@ -36,3 +36,4 @@ impl<K, V> Default for BTree<K, V> {
 mod mem;
 mod node;
 pub mod persistent;
+mod alloc;
