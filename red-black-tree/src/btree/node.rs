@@ -113,6 +113,11 @@ pub type ForceResultNodeRef<BorrowType, K, V> = ForceResult<
     NodeRef<BorrowType, K, V, marker::Internal>,
 >;
 
+pub type ForceResultHandle<BorrowType, K, V, Type> = ForceResult<
+    Handle<LeafNodeRef<BorrowType, K, V>, Type>,
+    Handle<InternalNodeRef<BorrowType, K, V>, Type>,
+>;
+
 pub enum LeftOrRight<T> {
     Left(T),
     Right(T),
@@ -857,7 +862,7 @@ impl<'a, K: 'a, V: 'a> HandleEdge<NodeRefMut<'a, K, V, marker::Leaf>> {
                 },
                 LeftOrRight::Right(insert_idx) => unsafe {
                     Handle::new_edge(result.right.borrow_mut(), insert_idx)
-                }
+                },
             };
             let handle = unsafe { insertion_edge.insert_fit(key, val).dormant() };
             (Some(result), handle)
@@ -874,12 +879,21 @@ impl<'a, K: 'a, V: 'a> HandleEdge<NodeRefMut<'a, K, V, marker::Internal>> {
         unsafe {
             slice_insert(self.node.key_area_mut(..new_len), self.idx, key);
             slice_insert(self.node.val_area_mut(..new_len), self.idx, val);
-            slice_insert(self.node.edge_area_mut(..new_len + 1), self.idx + 1, edge.node);
+            slice_insert(
+                self.node.edge_area_mut(..new_len + 1),
+                self.idx + 1,
+                edge.node,
+            );
             *self.node.len_mut() = new_len as u8;
         }
     }
 
-    fn insert(mut self, key: K, val: V, edge: Root<K, V>) -> Option<SplitResult<'a, K, V, marker::Internal>> {
+    fn insert(
+        mut self,
+        key: K,
+        val: V,
+        edge: Root<K, V>,
+    ) -> Option<SplitResult<'a, K, V, marker::Internal>> {
         assert!(edge.height == self.node.height - 1);
 
         if self.node.len() < CAPACITY {
@@ -892,10 +906,10 @@ impl<'a, K: 'a, V: 'a> HandleEdge<NodeRefMut<'a, K, V, marker::Internal>> {
             let mut insertion_edge = match insertion {
                 LeftOrRight::Left(insert_idx) => unsafe {
                     Handle::new_edge(result.left.reborrow_mut(), insert_idx)
-                }
+                },
                 LeftOrRight::Right(insert_idx) => unsafe {
                     Handle::new_edge(result.right.borrow_mut(), insert_idx)
-                }
+                },
             };
             insertion_edge.insert_fit(key, val, edge);
             Some(result)
@@ -980,11 +994,51 @@ impl<BorrowType: marker::BorrowType, K, V> HandleEdge<InternalNodeRef<BorrowType
         assert!(BorrowType::TRAVERSAL_PERMIT);
 
         let parent_ptr = NodeRef::as_internal_ptr(&self.node);
-        let node = unsafe { (*parent_ptr).edges.get_unchecked(self.idx).assume_init_read() };
+        let node = unsafe {
+            (*parent_ptr)
+                .edges
+                .get_unchecked(self.idx)
+                .assume_init_read()
+        };
         NodeRef {
             node,
             height: self.node.height - 1,
             _marker: PhantomData,
+        }
+    }
+}
+
+impl<BorrowType, K, V> HandleEdge<LeafNodeRef<BorrowType, K, V>> {
+    pub fn forget_node_type(self) -> HandleEdge<LeafOrInternalNodeRef<BorrowType, K, V>> {
+        unsafe { Handle::new_edge(self.node.forget_type(), self.idx) }
+    }
+}
+
+impl<BorrowType, K, V> HandleEdge<InternalNodeRef<BorrowType, K, V>> {
+    pub fn forget_node_type(self) -> HandleEdge<LeafOrInternalNodeRef<BorrowType, K, V>> {
+        unsafe { Handle::new_edge(self.node.forget_type(), self.idx) }
+    }
+}
+
+impl<BorrowType, K, V> HandleKV<LeafNodeRef<BorrowType, K, V>> {
+    pub fn forget_node_type(self) -> HandleKV<LeafOrInternalNodeRef<BorrowType, K, V>> {
+        unsafe { Handle::new_kv(self.node.forget_type(), self.idx) }
+    }
+}
+
+impl<BorrowType, K, V, Type> Handle<LeafOrInternalNodeRef<BorrowType, K, V>, Type> {
+    pub fn force(self) -> ForceResultHandle<BorrowType, K, V, Type> {
+        match self.node.force() {
+            ForceResult::Leaf(node) => ForceResult::Leaf(Handle {
+                node,
+                idx: self.idx,
+                _marker: PhantomData,
+            }),
+            ForceResult::Internal(node) => ForceResult::Internal(Handle {
+                node,
+                idx: self.idx,
+                _marker: PhantomData,
+            }),
         }
     }
 }
@@ -1004,8 +1058,14 @@ mod tests {
         let result = node.borrow_mut().last_edge().insert(CAPACITY, ());
         let mut split_result = result.0.unwrap();
         println!("middle: {:?}", split_result.kv.0);
-        println!("left-last: {:?}", split_result.left.last_kv().into_kv_mut().0);
-        println!("right-first: {:?}", split_result.right.borrow_mut().first_kv().into_kv_mut().0);
+        println!(
+            "left-last: {:?}",
+            split_result.left.last_kv().into_kv_mut().0
+        );
+        println!(
+            "right-first: {:?}",
+            split_result.right.borrow_mut().first_kv().into_kv_mut().0
+        );
         let right = split_result.right;
         unsafe {
             node.into_dying().forget_type().deallocate();
