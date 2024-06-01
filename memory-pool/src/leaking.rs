@@ -3,11 +3,11 @@ use std::{
     ptr::NonNull,
 };
 
-use crate::MemoryPool;
+use crate::MemoryPoolAlloc;
 
 pub struct LeakingMemoryPool;
 
-unsafe impl MemoryPool for LeakingMemoryPool {
+unsafe impl MemoryPoolAlloc for LeakingMemoryPool {
     type Error = ();
     fn try_allocate(&self, layout: Layout) -> Result<NonNull<u8>, Self::Error> {
         unsafe {
@@ -27,6 +27,8 @@ unsafe impl MemoryPool for LeakingMemoryPool {
 
 #[cfg(test)]
 mod tests {
+    use crate::MemoryPool;
+
     use super::*;
     use std::alloc::Layout;
 
@@ -55,8 +57,8 @@ mod tests {
     #[test]
     fn test_get_mut_ref() {
         let pool = LeakingMemoryPool;
-        let value = 42;
-        let a = pool.get_uninit_mut::<u32>();
+        let value = 42u32;
+        let a = pool.get_uninit_mut();
         a.write(value);
         let b = unsafe { a.assume_init_mut() };
         *b += 1;
