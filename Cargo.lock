@@ -390,6 +390,9 @@ dependencies = [
 [[package]]
 name = "red-black-tree"
 version = "0.1.0"
+dependencies = [
+ "memory-pool",
+]
 
 [[package]]
 name = "regex"

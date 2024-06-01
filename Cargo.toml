@@ -13,3 +13,4 @@ edition = "2021"
 [workspace.dependencies]
 criterion = "0.5.1"
 rand = "0.8.5"
+memory-pool = { path = "memory-pool" }
