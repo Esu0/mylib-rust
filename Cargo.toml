@@ -1,7 +1,9 @@
 [workspace]
 resolver = "2"
-members = [ "memory-pool",
-    "persistent-array", "union-find",
+members = [
+    "memory-pool",
+    "persistent-array",
+    "union-find",
 ]
 
 [workspace.package]
