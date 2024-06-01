@@ -701,6 +701,15 @@ impl<BorrowType, K, V, NodeType, HandleType> PartialEq
     }
 }
 
+impl<'a, K: 'a, V: 'a, NodeType> HandleKV<NodeRefImmut<'a, K, V, NodeType>> {
+    pub fn into_kv(self) -> (&'a K, &'a V) {
+        debug_assert!(self.idx < self.node.len());
+        let leaf = self.node.into_leaf();
+        let k = unsafe { leaf.keys.get_unchecked(self.idx).assume_init_ref() };
+        let v = unsafe { leaf.vals.get_unchecked(self.idx).assume_init_ref() };
+        (k, v)
+    }
+}
 impl<'a, K: 'a, V: 'a, NodeType> HandleKV<NodeRef<marker::Mut<'a>, K, V, NodeType>> {
     pub fn key_mut(&mut self) -> &mut K {
         unsafe { self.node.key_area_mut(self.idx).assume_init_mut() }
@@ -718,6 +727,55 @@ impl<'a, K: 'a, V: 'a, NodeType> HandleKV<NodeRef<marker::Mut<'a>, K, V, NodeTyp
         let k = unsafe { leaf.keys.get_unchecked_mut(self.idx).assume_init_mut() };
         let v = unsafe { leaf.vals.get_unchecked_mut(self.idx).assume_init_mut() };
         (k, v)
+    }
+}
+
+impl<'a, K, V, NodeType> HandleKV<NodeRefValMut<'a, K, V, NodeType>> {
+    pub fn into_kv_valmut(self) -> (&'a K, &'a mut V) {
+        unsafe { self.node.into_key_val_mut_at(self.idx) }
+    }
+}
+
+impl<'a, K: 'a, V: 'a, NodeType> HandleKV<NodeRefMut<'a, K, V, NodeType>> {
+    pub fn kv_mut(&mut self) -> (&mut K, &mut V) {
+        debug_assert!(self.idx < self.node.len());
+        unsafe {
+            let leaf = self.node.as_leaf_mut();
+            let k = leaf.keys.get_unchecked_mut(self.idx).assume_init_mut();
+            let v = leaf.vals.get_unchecked_mut(self.idx).assume_init_mut();
+            (k, v)
+        }
+    }
+
+    pub fn replace_kv(&mut self, k: K, v: V) -> (K, V) {
+        let (key, val) = self.kv_mut();
+        (std::mem::replace(key, k), std::mem::replace(val, v))
+    }
+}
+
+impl<K, V, NodeType> HandleKV<NodeRefDying<K, V, NodeType>> {
+    /// # Safety
+    /// ハンドルが指すノードがまだ解放されていないこと
+    pub unsafe fn into_key_val(mut self) -> (K, V) {
+        debug_assert!(self.idx < self.node.len());
+        let leaf = self.node.as_leaf_dying();
+        unsafe {
+            let k = leaf.keys.get_unchecked_mut(self.idx).assume_init_read();
+            let v = leaf.vals.get_unchecked_mut(self.idx).assume_init_read();
+            (k, v)
+        }
+    }
+
+    /// # Safety
+    /// ハンドルが指すノードがまだ解放されていないこと
+    #[inline]
+    pub unsafe fn drop_key_val(mut self) {
+        debug_assert!(self.idx < self.node.len());
+        let leaf = self.node.as_leaf_dying();
+        unsafe {
+            leaf.keys.get_unchecked_mut(self.idx).assume_init_drop();
+            leaf.vals.get_unchecked_mut(self.idx).assume_init_drop();
+        }
     }
 }
 
@@ -891,6 +949,7 @@ impl<'a, K: 'a, V: 'a> HandleKV<NodeRefMut<'a, K, V, marker::Internal>> {
         }
     }
 }
+
 impl<'a, K: 'a, V: 'a, NodeType> HandleKV<NodeRefMut<'a, K, V, NodeType>> {
     fn split_leaf_data(&mut self, new_node: &mut LeafNode<K, V>) -> (K, V) {
         debug_assert!(self.idx < self.node.len());
@@ -915,6 +974,46 @@ impl<'a, K: 'a, V: 'a, NodeType> HandleKV<NodeRefMut<'a, K, V, NodeType>> {
         }
     }
 }
+
+impl<BorrowType: marker::BorrowType, K, V> HandleEdge<InternalNodeRef<BorrowType, K, V>> {
+    pub fn descend(self) -> LeafOrInternalNodeRef<BorrowType, K, V> {
+        assert!(BorrowType::TRAVERSAL_PERMIT);
+
+        let parent_ptr = NodeRef::as_internal_ptr(&self.node);
+        let node = unsafe { (*parent_ptr).edges.get_unchecked(self.idx).assume_init_read() };
+        NodeRef {
+            node,
+            height: self.node.height - 1,
+            _marker: PhantomData,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insert_into_leaf() {
+        let mut node = NodeRef::<_, usize, (), _>::new_leaf();
+        for i in 0..CAPACITY {
+            let handle = node.borrow_mut().last_edge();
+            let result = handle.insert(i, ());
+            assert!(result.0.is_none());
+        }
+        let result = node.borrow_mut().last_edge().insert(CAPACITY, ());
+        let mut split_result = result.0.unwrap();
+        println!("middle: {:?}", split_result.kv.0);
+        println!("left-last: {:?}", split_result.left.last_kv().into_kv_mut().0);
+        println!("right-first: {:?}", split_result.right.borrow_mut().first_kv().into_kv_mut().0);
+        let right = split_result.right;
+        unsafe {
+            node.into_dying().forget_type().deallocate();
+            right.into_dying().forget_type().deallocate();
+        }
+    }
+}
+
 pub mod marker {
     use std::marker::PhantomData;
 
