@@ -81,6 +81,9 @@ pub type NodeRefOwned<K, V, Type> = NodeRef<marker::Owned, K, V, Type>;
 pub type NodeRefDying<K, V, Type> = NodeRef<marker::Dying, K, V, Type>;
 pub type NodeRefDormantMut<K, V, Type> = NodeRef<marker::DormantMut, K, V, Type>;
 pub type NodeRefImmut<'a, K, V, Type> = NodeRef<marker::Immut<'a>, K, V, Type>;
+pub type NodeRefNodeOwned<'a, K, V, Type> = NodeRef<marker::NodeOwned<'a>, K, V, Type>;
+pub type NodeRefNodeMut<'a, K, V, Type> = NodeRef<marker::NodeMut<'a>, K, V, Type>;
+
 pub type LeafNodeRef<BorrowType, K, V> = NodeRef<BorrowType, K, V, marker::Leaf>;
 pub type InternalNodeRef<BorrowType, K, V> = NodeRef<BorrowType, K, V, marker::Internal>;
 pub type LeafOrInternalNodeRef<BorrowType, K, V> =
@@ -207,6 +210,23 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::Leaf> {
     }
 }
 
+impl<'a, K, V> NodeRef<marker::NodeOwned<'a>, K, V, marker::Leaf> {
+    pub fn new_leaf<A>(alloc: A) -> Self
+    where
+        A: Allocator<LeafNode<K, V>>,
+    {
+        Self::from_new_leaf(LeafNode::new(alloc))
+    }
+
+    fn from_new_leaf(leaf: &mut LeafNode<K, V>) -> Self {
+        NodeRef {
+            height: 0,
+            node: leaf.into(),
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl<K, V> NodeRef<marker::Owned, K, V, marker::Internal> {
     pub fn new_internal<A>(child: Root<K, V>, alloc: A) -> Self
     where
@@ -224,6 +244,22 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::Internal> {
         let node = NonNull::from(internal).cast();
         NodeRef {
             height,
+            node,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a, K, V> NodeRef<marker::NodeOwned<'a>, K, V, marker::Internal> {
+    pub fn new_internal<A>(child: NodeRefImmut<'a, K, V, marker::LeafOrInternal>, alloc: A) -> Self
+    where
+        A: Allocator<InternalNode<K, V>>,
+    {
+        let new_node = unsafe { InternalNode::new(alloc) };
+        new_node.edges[0].write(child.node);
+        let node = NonNull::from(new_node).cast();
+        NodeRef {
+            height: child.height + 1,
             node,
             _marker: PhantomData,
         }
@@ -258,6 +294,12 @@ impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
     }
 }
 
+impl<'a, K, V> NodeRefNodeMut<'a, K, V, marker::Internal> {
+    fn as_internal_mut(&mut self) -> &mut InternalNode<K, V> {
+        unsafe { &mut *NodeRef::as_internal_ptr(self) }
+    }
+}
+
 impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
     /// ノードの長さを返す。これはキーと値のペアの数である。
     /// 辺の数は`len() + 1`である。
@@ -273,7 +315,7 @@ impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
     }
 
     /// 同じノードへの一時的な不変ポインタを返す。
-    pub fn reborrow(&self) -> NodeRef<marker::Immut<'_>, K, V, Type> {
+    pub fn reborrow(&self) -> NodeRefImmut<'_, K, V, Type> {
         NodeRef {
             height: self.height,
             node: self.node,
@@ -303,7 +345,7 @@ impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
     }
 }
 
-impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Immut<'a>, K, V, Type> {
+impl<'a, K: 'a, V: 'a, Type> NodeRefImmut<'a, K, V, Type> {
     /// 不変な木の中間ノードまたは葉ノードにおける葉の部分のデータの共有参照を返す。
     fn into_leaf(self) -> &'a LeafNode<K, V> {
         unsafe { &*NodeRef::as_leaf_ptr(&self) }
@@ -313,6 +355,11 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Immut<'a>, K, V, Type> {
     pub fn keys(&self) -> &[K] {
         let leaf = self.into_leaf();
         unsafe { &*(leaf.keys.get_unchecked(..leaf.len as usize) as *const _ as *const [K]) }
+    }
+
+    pub fn vals(&self) -> &[V] {
+        let leaf = self.into_leaf();
+        unsafe { &*(leaf.vals.get_unchecked(..leaf.len as usize) as *const _ as *const [V]) }
     }
 }
 
@@ -372,6 +419,12 @@ impl<'a, K, V, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     }
 }
 
+impl<'a, K, V, Type> NodeRefNodeMut<'a, K, V, Type> {
+    fn as_leaf_mut(&mut self) -> &mut LeafNode<K, V> {
+        unsafe { &mut *Self::as_leaf_ptr(self) }
+    }
+}
+
 impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     /// キーの格納場所への排他参照を借用して返す。
     ///
@@ -411,11 +464,49 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     }
 }
 
+impl<'a, K: 'a, V: 'a, Type> NodeRefNodeMut<'a, K, V, Type> {
+    unsafe fn key_area_mut<I, Output: ?Sized>(&mut self, index: I) -> &mut Output
+    where
+        I: SliceIndex<[MaybeUninit<K>], Output = Output>,
+    {
+        unsafe {
+            self.as_leaf_mut().keys.as_mut_slice().get_unchecked_mut(index)
+        }
+    }
+
+    unsafe fn val_area_mut<I, Output: ?Sized>(&mut self, index: I) -> &mut Output
+    where
+        I: SliceIndex<[MaybeUninit<V>], Output = Output>,
+    {
+        unsafe {
+            self.as_leaf_mut().vals.as_mut_slice().get_unchecked_mut(index)
+        }
+    }
+
+    pub fn len_mut(&mut self) -> &mut u8 {
+        &mut self.as_leaf_mut().len
+    }
+}
+
 impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
     /// 辺の格納場所への排他参照を借用して返す。
     ///
     /// # Safety
     /// `index`が0..CAPACITY + 1の範囲にあること
+    unsafe fn edge_area_mut<I, Output: ?Sized>(&mut self, index: I) -> &mut Output
+    where
+        I: SliceIndex<[MaybeUninit<BoxedNode<K, V>>], Output = Output>,
+    {
+        unsafe {
+            self.as_internal_mut()
+                .edges
+                .as_mut_slice()
+                .get_unchecked_mut(index)
+        }
+    }
+}
+
+impl<'a, K: 'a, V: 'a> NodeRefNodeMut<'a, K, V, marker::Internal> {
     unsafe fn edge_area_mut<I, Output: ?Sized>(&mut self, index: I) -> &mut Output
     where
         I: SliceIndex<[MaybeUninit<BoxedNode<K, V>>], Output = Output>,
@@ -536,7 +627,7 @@ impl<K, V> LeafOrInternalNodeRef<marker::Owned, K, V> {
     where
         A: Allocator<LeafNode<K, V>>,
     {
-        NodeRef::new_leaf(alloc).forget_type()
+        NodeRefOwned::new_leaf(alloc).forget_type()
     }
 
     /// 以前のルートノードへの辺のみをもつ新しい中間ノードを追加し、それを
@@ -546,7 +637,7 @@ impl<K, V> LeafOrInternalNodeRef<marker::Owned, K, V> {
         A: Allocator<InternalNode<K, V>>,
     {
         super::mem::take_mut(self, |old_root| {
-            NodeRef::new_internal(old_root, alloc).forget_type()
+            NodeRefOwned::new_internal(old_root, alloc).forget_type()
         });
         NodeRef {
             height: self.height,
@@ -730,7 +821,7 @@ impl<'a, K: 'a, V: 'a, NodeType> HandleKV<NodeRefImmut<'a, K, V, NodeType>> {
     }
 }
 
-impl<'a, K: 'a, V: 'a, NodeType> HandleKV<NodeRef<marker::Mut<'a>, K, V, NodeType>> {
+impl<'a, K: 'a, V: 'a, NodeType> HandleKV<NodeRefMut<'a, K, V, NodeType>> {
     pub fn key_mut(&mut self) -> &mut K {
         unsafe { self.node.key_area_mut(self.idx).assume_init_mut() }
     }
@@ -802,7 +893,7 @@ impl<K, V, NodeType> HandleKV<NodeRefDying<K, V, NodeType>> {
 impl<BorrowType, K, V, NodeType, HandleType>
     Handle<NodeRef<BorrowType, K, V, NodeType>, HandleType>
 {
-    pub fn reborrow(&self) -> Handle<NodeRef<marker::Immut<'_>, K, V, NodeType>, HandleType> {
+    pub fn reborrow(&self) -> Handle<NodeRefImmut<'_, K, V, NodeType>, HandleType> {
         Handle {
             node: self.node.reborrow(),
             idx: self.idx,
@@ -950,7 +1041,7 @@ impl<'a, K: 'a, V: 'a> HandleKV<NodeRefMut<'a, K, V, marker::Leaf>> {
         SplitResult {
             left: self.node,
             kv,
-            right: NodeRef::from_new_leaf(new_node),
+            right: NodeRefOwned::from_new_leaf(new_node),
         }
     }
 
@@ -1019,7 +1110,7 @@ impl<'a, K: 'a, V: 'a, NodeType> HandleKV<NodeRefMut<'a, K, V, NodeType>> {
 }
 
 impl<BorrowType: marker::BorrowType, K, V> HandleEdge<InternalNodeRef<BorrowType, K, V>> {
-    pub fn descend(self) -> LeafOrInternalNodeRef<BorrowType, K, V> {
+    pub fn descend(self) -> LeafOrInternalNodeRef<BorrowType::TraversalBorrowType, K, V> {
         assert!(BorrowType::TRAVERSAL_PERMIT);
 
         let parent_ptr = NodeRef::as_internal_ptr(&self.node);
@@ -1072,6 +1163,145 @@ impl<BorrowType, K, V, Type> Handle<LeafOrInternalNodeRef<BorrowType, K, V>, Typ
     }
 }
 
+pub struct SplitResultPersistent<'a, K, V, NodeType> {
+    pub left: NodeRef<marker::NodeOwned<'a>, K, V, NodeType>,
+    pub kv: (K, V),
+    pub right: NodeRef<marker::NodeOwned<'a>, K, V, NodeType>,
+}
+
+pub enum InsertResult<'a, K, V, NodeType> {
+    Fit(HandleKV<NodeRef<marker::NodeOwned<'a>, K, V, NodeType>>),
+    Split(SplitResultPersistent<'a, K, V, NodeType>),
+}
+
+impl<'a, K, V, Type> NodeRefNodeOwned<'a, K, V, Type> {
+    pub fn borrow_mut(&mut self) -> NodeRef<marker::NodeMut<'_>, K, V, Type> {
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a, K: 'a, V: 'a> HandleEdge<NodeRefNodeMut<'a, K, V, marker::Leaf>> {
+    unsafe fn insert_fit(mut self, key: K, val: V) -> HandleKV<NodeRefNodeMut<'a, K, V, marker::Leaf>> {
+        debug_assert!(self.node.len() < CAPACITY);
+        let new_len = self.node.len() + 1;
+
+        unsafe {
+            slice_insert(self.node.key_area_mut(..new_len), self.idx, key);
+            slice_insert(self.node.val_area_mut(..new_len), self.idx, val);
+            *self.node.len_mut() = new_len as u8;
+
+            Handle::new_kv(self.node, self.idx)
+        }
+    }
+}
+impl<'a, K: 'a, V: 'a> HandleEdge<NodeRefImmut<'a, K, V, marker::Leaf>> {
+    pub fn insert_persistent<A>(self, key: K, val: V, alloc: A) -> InsertResult<'a, K, V, marker::Leaf>
+    where
+        A: Allocator<LeafNode<K, V>>,
+        K: Clone,
+        V: Clone,
+    {
+        if self.node.len() < CAPACITY {
+            InsertResult::Fit(self.insert_fit_persistent(key, val, alloc))
+        } else {
+            let (middle_kv_idx, insertion) = splitpoint(self.idx);
+            let middle = unsafe { Handle::new_kv(self.node, middle_kv_idx) };
+            let mut result = middle.split(alloc);
+            let insertion_edge = match insertion {
+                LeftOrRight::Left(insert_idx) => unsafe {
+                    Handle::new_edge(result.left.borrow_mut(), insert_idx)
+                }
+                LeftOrRight::Right(insert_idx) => unsafe {
+                    Handle::new_edge(result.right.borrow_mut(), insert_idx)
+                }
+            };
+            unsafe { insertion_edge.insert_fit(key, val) };
+            InsertResult::Split(result)
+        }
+    }
+
+    fn insert_fit_persistent<A>(self, key: K, val: V, alloc: A) -> HandleKV<NodeRef<marker::NodeOwned<'a>, K, V, marker::Leaf>>
+    where
+        A: Allocator<LeafNode<K, V>>,
+        K: Clone,
+        V: Clone,
+    {
+        debug_assert!(self.node.len() < CAPACITY);
+        let new_node = LeafNode::new(alloc);
+        let new_len = self.node.len() + 1;
+        
+        unsafe {
+            slice_insert_persistent(
+                self.node.keys(),
+                self.idx,
+                key,
+                &mut new_node.keys,
+            );
+            slice_insert_persistent(
+                self.node.vals(),
+                self.idx,
+                val,
+                &mut new_node.vals,
+            );
+            new_node.len = new_len as u8;
+            Handle::new_kv(NodeRef::<marker::NodeOwned<'_>, _, _, _>::from_new_leaf(new_node), self.idx)
+        }
+    }
+}
+
+impl<'a, K: 'a, V: 'a> HandleKV<NodeRefImmut<'a, K, V, marker::Leaf>> {
+    pub fn split<A>(self, alloc: A) -> SplitResultPersistent<'a, K, V, marker::Leaf>
+    where
+        A: Allocator<LeafNode<K, V>>,
+        K: Clone,
+        V: Clone,
+    {
+        let new_node_left = LeafNode::new(alloc.clone());
+        let new_node_right = LeafNode::new(alloc);
+        let kv = self.split_leaf_data_persistent(new_node_left, new_node_right);
+        SplitResultPersistent {
+            left: NodeRefNodeOwned::from_new_leaf(new_node_left),
+            kv,
+            right: NodeRefNodeOwned::from_new_leaf(new_node_right),
+        }
+    }
+}
+
+impl<'a, K: Clone + 'a, V: Clone + 'a, NodeType> HandleKV<NodeRefImmut<'a, K, V, NodeType>> {
+    fn split_leaf_data_persistent(self, new_node_left: &mut LeafNode<K, V>, new_node_right: &mut LeafNode<K, V>) -> (K, V) {
+        debug_assert!(self.idx < self.node.len());
+        let old_len = self.node.len();
+        let right_len = old_len - self.idx - 1;
+        new_node_left.len = self.idx as u8;
+        new_node_right.len = right_len as u8;
+        unsafe {
+            let k = self.node.keys().get_unchecked(self.idx).clone();
+            let v = self.node.vals().get_unchecked(self.idx).clone();
+
+            clone_to_slice(
+                self.node.keys().get_unchecked(..self.idx),
+                &mut new_node_left.keys[..self.idx],
+            );
+            clone_to_slice(
+                self.node.vals().get_unchecked(..self.idx),
+                &mut new_node_left.vals[..self.idx],
+            );
+            clone_to_slice(
+                self.node.keys().get_unchecked(self.idx + 1..old_len),
+                &mut new_node_right.keys[..right_len],
+            );
+            clone_to_slice(
+                self.node.vals().get_unchecked(self.idx + 1..old_len),
+                &mut new_node_right.vals[..right_len],
+            );
+            (k, v)
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use crate::btree::alloc::GlobalAlloc;
@@ -1080,7 +1310,7 @@ mod tests {
 
     #[test]
     fn insert_into_leaf() {
-        let mut node = NodeRef::<_, usize, (), _>::new_leaf(GlobalAlloc);
+        let mut node = NodeRefOwned::<usize, (), _>::new_leaf(GlobalAlloc);
         for i in 0..CAPACITY {
             let handle = node.borrow_mut().last_edge();
             let result = handle.insert(i, (), GlobalAlloc);
@@ -1119,18 +1349,42 @@ pub mod marker {
     pub struct Mut<'a>(PhantomData<&'a mut ()>);
     pub struct ValMut<'a>(PhantomData<&'a mut ()>);
 
+    /* ここから永続化のための拡張 */
+    /// ノードのみを所有しており、その子供以降は所有していない。
+    /// すなわち、キー、値、辺の変更やドロップはできるが、子ノードへのアクセスは
+    /// 不変であり、変更やドロップはできない。
+    pub struct NodeOwned<'a>(PhantomData<&'a ()>);
+    /// 直接参照しているノードのみ変更可能であり、その子供以降は変更不可能である。
+    pub struct NodeMut<'a>(PhantomData<&'a mut ()>);
+
     pub trait BorrowType {
         const TRAVERSAL_PERMIT: bool = true;
+        type TraversalBorrowType;
     }
 
     impl BorrowType for Owned {
         const TRAVERSAL_PERMIT: bool = false;
+        type TraversalBorrowType = Owned;
     }
-    impl BorrowType for Dying {}
-    impl BorrowType for DormantMut {}
-    impl<'a> BorrowType for Immut<'a> {}
-    impl<'a> BorrowType for Mut<'a> {}
-    impl<'a> BorrowType for ValMut<'a> {}
+    impl BorrowType for Dying {
+        type TraversalBorrowType = Dying;
+    }
+    impl BorrowType for DormantMut {
+        type TraversalBorrowType = DormantMut;
+    }
+    impl<'a> BorrowType for Immut<'a> {
+        type TraversalBorrowType = Immut<'a>;
+    }
+    impl<'a> BorrowType for Mut<'a> {
+        type TraversalBorrowType = Mut<'a>;
+    }
+    impl<'a> BorrowType for ValMut<'a> {
+        type TraversalBorrowType = ValMut<'a>;
+    }
+
+    impl<'a> BorrowType for NodeMut<'a> {
+        type TraversalBorrowType = Immut<'a>;
+    }
 
     pub enum KV {}
     pub enum Edge {}
@@ -1149,6 +1403,25 @@ unsafe fn slice_insert<T>(slice: &mut [MaybeUninit<T>], idx: usize, val: T) {
         ptr::copy(slice_ptr.add(idx), slice_ptr.add(idx + 1), len - idx - 1);
     }
     (*slice_ptr.add(idx)).write(val);
+}
+
+/// 要素を挿入した配列をdstに格納する。
+/// 
+/// # Safety
+/// スライスが`idx`以上の要素をもち、dstがスライスよりも一つ以上長いこと
+// Note: `T: Clone`の制約だと効率的にコピーができない可能性がある。`T: Copy`制約にすると高速にコピーできるが、
+// `Rc<T>`などの型に対応できなくなる。
+unsafe fn slice_insert_persistent<T: Clone>(slice: &[T], idx: usize, val: T, dst: &mut [MaybeUninit<T>]) {
+    let len = slice.len();
+    debug_assert!(idx < len);
+    debug_assert!(len < dst.len());
+    for i in 0..idx {
+        dst.get_unchecked_mut(i).write(slice.get_unchecked(i).clone());
+    }
+    dst.get_unchecked_mut(idx).write(val);
+    for i in idx..len {
+        dst.get_unchecked_mut(i + 1).write(slice.get_unchecked(i).clone());
+    }
 }
 
 /// 要素をスライスから削除し、その要素を返す。
@@ -1192,6 +1465,13 @@ fn move_to_slice<T>(src: &mut [MaybeUninit<T>], dst: &mut [MaybeUninit<T>]) {
     assert!(src.len() == dst.len());
     unsafe {
         ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len());
+    }
+}
+
+fn clone_to_slice<T: Clone>(src: &[T], dst: &mut [MaybeUninit<T>]) {
+    assert!(src.len() == dst.len());
+    for i in 0..src.len() {
+        dst[i].write(src[i].clone());
     }
 }
 
