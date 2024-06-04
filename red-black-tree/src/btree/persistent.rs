@@ -96,4 +96,12 @@ where
             }
         }
     }
+
+    pub fn remove<Q>(&self, key: &Q) -> Self
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        todo!()
+    }
 }
