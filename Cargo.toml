@@ -3,7 +3,8 @@ resolver = "2"
 members = [
     "memory-pool",
     "persistent-array",
-    "union-find", "z-algorithm",
+    "union-find",
+    "z-algorithm",
 ]
 
 [workspace.package]
