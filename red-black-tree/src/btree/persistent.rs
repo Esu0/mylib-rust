@@ -73,7 +73,7 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        todo!()
+        self.get_key_value(key).map(|(_, v)| v)
     }
 
     pub fn get_key_value<Q>(&self, key: &Q) -> Option<(&K, &V)>
