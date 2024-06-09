@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "memory-pool",
     "persistent-array",
+    "u256",
     "union-find",
     "z-algorithm",
 ]
