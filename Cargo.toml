@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "lib-checker",
     "memory-pool",
     "persistent-array",
     "union-find",
