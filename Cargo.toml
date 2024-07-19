@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "lib-checker",
+    "link-cut-tree",
     "memory-pool",
     "persistent-array",
     "union-find",
