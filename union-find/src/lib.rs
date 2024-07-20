@@ -66,9 +66,9 @@ impl<T> UnionFind<T> {
 }
 
 impl<T: Query> UnionFind<T> {
-    pub fn unite(&mut self, i: usize, j: usize) {
-        let root_i = self.find_fast(i);
-        let root_j = self.find_fast(j);
+    pub fn unite(&mut self, i: usize, j: usize) -> bool {
+        let root_i = self.find_rc(i);
+        let root_j = self.find_rc(j);
         if root_i != root_j {
             let size_i = self.size[root_i];
             let size_j = self.size[root_j];
@@ -83,6 +83,9 @@ impl<T: Query> UnionFind<T> {
                 let new_data = self.query[root_j].query(&self.query[root_i]);
                 self.query[root_j] = new_data;
             }
+            true
+        } else {
+            false
         }
     }
 
@@ -99,7 +102,7 @@ impl<T: Query> UnionFind<T> {
         &self.query[self.find(i)]
     }
 
-    pub fn find_fast(&mut self, mut i: usize) -> usize {
+    pub fn find_rc(&mut self, mut i: usize) -> usize {
         let mut p = self.uf[i];
         let mut prev_i = usize::MAX;
         while p != i {
@@ -115,9 +118,19 @@ impl<T: Query> UnionFind<T> {
         p
     }
 
-    pub fn query_fast(&mut self, i: usize) -> &T {
-        let root = self.find_fast(i);
+    pub fn query_rc(&mut self, i: usize) -> &T {
+        let root = self.find_rc(i);
         &self.query[root]
+    }
+
+    pub fn size(&self, i: usize) -> usize {
+        let root = self.find(i);
+        self.size[root]
+    }
+
+    pub fn size_rc(&mut self, i: usize) -> usize {
+        let root = self.find_rc(i);
+        self.size[root]
     }
 }
 
@@ -133,11 +146,11 @@ mod tests {
         uf.unite(3, 4);
         uf.unite(5, 6);
         uf.unite(8, 9);
-        assert_eq!(uf.find_fast(0), uf.find_fast(1));
-        assert_eq!(uf.find_fast(2), uf.find_fast(3));
-        assert_ne!(uf.find_fast(0), uf.find_fast(2));
-        assert_eq!(uf.find_fast(3), uf.find_fast(4));
-        assert_eq!(uf.find_fast(2), uf.find_fast(4));
-        assert_ne!(uf.find_fast(2), uf.find_fast(5));
+        assert_eq!(uf.find_rc(0), uf.find_rc(1));
+        assert_eq!(uf.find_rc(2), uf.find_rc(3));
+        assert_ne!(uf.find_rc(0), uf.find_rc(2));
+        assert_eq!(uf.find_rc(3), uf.find_rc(4));
+        assert_eq!(uf.find_rc(2), uf.find_rc(4));
+        assert_ne!(uf.find_rc(2), uf.find_rc(5));
     }
 }
