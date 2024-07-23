@@ -11,6 +11,7 @@ use std::{
 pub struct Node<T, Q> {
     value: T,
     query: T,
+    reverse: bool,
     parent: Option<NodeRef<T, Q>>,
     left: Option<NodeRef<T, Q>>,
     right: Option<NodeRef<T, Q>>,
@@ -78,10 +79,20 @@ impl<T: Clone, Q> Node<T, Q> {
         Self {
             query: value.clone(),
             value,
+            reverse: false,
             parent: None,
             left: None,
             right: None,
             _marker: PhantomData,
+        }
+    }
+}
+
+impl<T, Q> Node<T, Q> {
+    pub fn child(&self, dir: Direction) -> Option<NodeRef<T, Q>> {
+        match dir {
+            Left => self.left,
+            Right => self.right,
         }
     }
 }
@@ -181,6 +192,7 @@ impl<T, Q> NodeRef<T, Q> {
         let mut new_node = Node {
             query: value.clone(),
             value,
+            reverse: false,
             parent: Some(self),
             left: None,
             right: None,
@@ -249,6 +261,47 @@ impl<T, Q> NodeRef<T, Q> {
             &mut *ptr
         }
     }
+
+    pub fn reverse(self) {
+        unsafe {
+            let reverse_ptr = addr_of_mut!((*self.0.as_ptr()).reverse);
+            let left_ptr = addr_of_mut!((*self.0.as_ptr()).left);
+            let right_ptr = addr_of_mut!((*self.0.as_ptr()).right);
+            *reverse_ptr = !*reverse_ptr;
+            let left = left_ptr.read();
+            left_ptr.write(right_ptr.read());
+            right_ptr.write(left);
+        }
+    }
+
+    pub fn push(mut self) -> bool {
+        let node = self.node_mut();
+        if node.reverse {
+            if let Some(left) = node.left {
+                left.reverse();
+            }
+            if let Some(right) = node.right {
+                right.reverse();
+            }
+            node.reverse = false;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn push_either(mut self, dir: Direction) -> bool {
+        let node = self.node_mut();
+        if node.reverse {
+            if let Some(child) = node.child(dir) {
+                child.reverse();
+            }
+            node.reverse = false;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl<T: Clone, Q: Query<Elem = T> + Commutative> NodeRef<T, Q> {
@@ -275,6 +328,11 @@ impl<T: Clone, Q: Query<Elem = T> + Commutative> NodeRef<T, Q> {
         let mut pd = self.parent_and_direction();
         while let Some((p, Some(dir1))) = pd {
             if let Some((gp, Some(dir2))) = p.parent_and_direction() {
+                let dir1 = if gp.push() {dir1.opposite()} else {dir1};
+                if p.push_either(dir1.opposite()) {
+                    self.reverse();
+                }
+                self.push();
                 if dir1 == dir2 {
                     let next_p = gp.rot_child(p, dir1.opposite());
                     p.rot_child(self, dir1.opposite());
@@ -288,6 +346,10 @@ impl<T: Clone, Q: Query<Elem = T> + Commutative> NodeRef<T, Q> {
                 p.update_from_child(op);
                 // self.update_from_child(query);
             } else {
+                if p.push_either(dir1.opposite()) {
+                    self.reverse();
+                }
+                self.push();
                 let ret = p.rot_child(self, dir1.opposite());
                 p.update_from_child(op);
                 // self.update_from_child(op);
@@ -331,6 +393,11 @@ impl<T: Clone, Q: Query<Elem = T> + Commutative> NodeRef<T, Q> {
     pub fn update_and_get_query(&self, op: &Q) -> &T {
         self.update_from_child(op);
         self.query()
+    }
+
+    pub fn evert(self, op: &Q) {
+        self.expose(op);
+        self.reverse();
     }
 }
 
@@ -498,5 +565,41 @@ mod tests {
             println!("{}", Tree::from(nodei));
             println!("query: {}", nodei.update_and_get_query(&op));
         }
+    }
+
+    #[test]
+    fn evert_test() {
+        let op = Add;
+        let nodes = (0u32..10)
+            .map(|i| NodeRef::new(Node::<_, Add>::new(i)))
+            .collect::<Vec<_>>();
+        nodes[0].link(nodes[1], &op);
+        nodes[1].link(nodes[2], &op);
+        nodes[2].link(nodes[4], &op);
+        nodes[3].link(nodes[4], &op);
+        nodes[5].link(nodes[4], &op);
+        nodes[6].link(nodes[1], &op);
+        nodes[7].link(nodes[6], &op);
+        nodes[8].link(nodes[1], &op);
+
+        nodes[7].evert(&op);
+        println!("{}", Tree::from(nodes[7]));
+        for &nodei in &nodes[0..9] {
+            nodei.expose(&op);
+            println!("--------------------------");
+            println!("{}", Tree::from(nodei));
+            println!("query: {}", nodei.update_and_get_query(&op));
+        }
+        nodes[8].evert(&op);
+        nodes[3].expose(&op);
+        println!("{}", nodes[3].update_and_get_query(&op));
+        nodes[4].evert(&op);
+        nodes[5].expose(&op);
+        println!("{}", nodes[5].update_and_get_query(&op));
+        nodes[5].evert(&op);
+        nodes[7].expose(&op);
+        // TODO: バグ修正
+        println!("{}", Tree::from(nodes[7]));
+        println!("{}", nodes[7].update_and_get_query(&op));
     }
 }
