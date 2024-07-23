@@ -3,19 +3,22 @@ use std::{
     collections::HashSet,
     fmt,
     hash::Hash,
+    marker::PhantomData,
     ptr::{addr_of, addr_of_mut, NonNull},
 };
 
 #[derive(Clone)]
-pub struct Node<T> {
+pub struct Node<T, Q> {
     value: T,
-    parent: Option<NodeRef<T>>,
-    left: Option<NodeRef<T>>,
-    right: Option<NodeRef<T>>,
+    query: T,
+    parent: Option<NodeRef<T, Q>>,
+    left: Option<NodeRef<T, Q>>,
+    right: Option<NodeRef<T, Q>>,
+    _marker: PhantomData<fn() -> Q>,
 }
 
 #[repr(transparent)]
-pub struct NodeRef<T>(NonNull<Node<T>>);
+pub struct NodeRef<T, Q>(NonNull<Node<T, Q>>);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
@@ -34,23 +37,25 @@ impl Direction {
 
 use Direction::*;
 
-impl<T> Clone for NodeRef<T> {
+use crate::query::{Commutative, Query};
+
+impl<T, Q> Clone for NodeRef<T, Q> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T> Copy for NodeRef<T> {}
+impl<T, Q> Copy for NodeRef<T, Q> {}
 
-impl<T> PartialEq for NodeRef<T> {
+impl<T, Q> PartialEq for NodeRef<T, Q> {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
     }
 }
 
-impl<T> Eq for NodeRef<T> {}
+impl<T, Q> Eq for NodeRef<T, Q> {}
 
-impl<T> Hash for NodeRef<T> {
+impl<T, Q> Hash for NodeRef<T, Q> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.hash(state)
     }
@@ -61,26 +66,28 @@ impl<T> Hash for NodeRef<T> {
     {
         NonNull::hash_slice(
             unsafe {
-                std::slice::from_raw_parts(data.as_ptr() as *const NonNull<Node<T>>, data.len())
+                std::slice::from_raw_parts(data.as_ptr() as *const NonNull<Node<T, Q>>, data.len())
             },
             state,
         )
     }
 }
 
-impl<T> Node<T> {
-    pub const fn new(value: T) -> Self {
+impl<T: Clone, Q> Node<T, Q> {
+    pub fn new(value: T) -> Self {
         Self {
+            query: value.clone(),
             value,
             parent: None,
             left: None,
             right: None,
+            _marker: PhantomData,
         }
     }
 }
 
-impl<T> NodeRef<T> {
-    pub fn new(node: Node<T>) -> Self {
+impl<T, Q> NodeRef<T, Q> {
+    pub fn new(node: Node<T, Q>) -> Self {
         Self(NonNull::from(Box::leak(Box::new(node))))
     }
 
@@ -129,7 +136,8 @@ impl<T> NodeRef<T> {
         (old_child, old_parent)
     }
 
-    /// dirの方向に木の回転を行う。childはdirの反対方向の子である必要があることに注意
+    /// dirの方向に木の回転を行う。childはdirの反対方向の子であると仮定して回転を行うことに注意
+    /// selfとchildが双方向にリンクされている必要はない
     pub fn rot_child(self, child: Self, dir: Direction) -> Option<Self> {
         let (old_child, old_parent) = child.link_child(dir, Some(self));
         self.link_child(dir.opposite(), old_child);
@@ -165,13 +173,18 @@ impl<T> NodeRef<T> {
         self.parent().map(|parent| (parent, parent.direction(self)))
     }
 
-    pub fn insert_val(self, dir: Direction, value: T) -> Self {
+    pub fn insert_val(self, dir: Direction, value: T) -> Self
+    where
+        T: Clone,
+    {
         let child = self.child(dir);
         let mut new_node = Node {
+            query: value.clone(),
             value,
             parent: Some(self),
             left: None,
             right: None,
+            _marker: PhantomData,
         };
         match dir {
             Left => new_node.left = child,
@@ -201,11 +214,64 @@ impl<T> NodeRef<T> {
         }
     }
 
-    pub fn node(&self) -> &Node<T> {
+    pub fn node(&self) -> &Node<T, Q> {
         unsafe { self.0.as_ref() }
     }
 
-    pub fn splay(self) -> Option<Self> {
+    pub fn node_mut(&mut self) -> &mut Node<T, Q> {
+        unsafe { self.0.as_mut() }
+    }
+
+    pub fn val(&self) -> &T {
+        unsafe {
+            let ptr = addr_of!((*self.0.as_ptr()).value);
+            &*ptr
+        }
+    }
+
+    pub fn val_mut(&mut self) -> &mut T {
+        unsafe {
+            let ptr = addr_of_mut!((*self.0.as_ptr()).value);
+            &mut *ptr
+        }
+    }
+
+    pub fn query(&self) -> &T {
+        unsafe {
+            let ptr = addr_of!((*self.0.as_ptr()).query);
+            &*ptr
+        }
+    }
+
+    pub fn query_mut(&mut self) -> &mut T {
+        unsafe {
+            let ptr = addr_of_mut!((*self.0.as_ptr()).query);
+            &mut *ptr
+        }
+    }
+}
+
+impl<T: Clone, Q: Query<Elem = T> + Commutative> NodeRef<T, Q> {
+    pub fn update_from_child(mut self, op: &Q) {
+        let Node {
+            value: ref val,
+            query: query_mut,
+            left,
+            right,
+            ..
+        } = self.node_mut();
+        match (*left, *right) {
+            (Some(left), Some(right)) => {
+                *query_mut = op.query(&op.query(left.query(), val), right.query())
+            }
+            (Some(left), None) => *self.query_mut() = op.query(left.query(), val),
+            (None, Some(right)) => *self.query_mut() = op.query(val, right.query()),
+            (None, None) => *self.query_mut() = val.clone(),
+        };
+    }
+
+    /// selfのクエリの値は更新しない
+    pub fn splay(self, op: &Q) -> Option<Self> {
         let mut pd = self.parent_and_direction();
         while let Some((p, Some(dir1))) = pd {
             if let Some((gp, Some(dir2))) = p.parent_and_direction() {
@@ -218,27 +284,35 @@ impl<T> NodeRef<T> {
                     let next_p = gp.rot_child(self, dir1);
                     pd = next_p.map(|p| (p, p.direction(gp)));
                 }
+                gp.update_from_child(op);
+                p.update_from_child(op);
+                // self.update_from_child(query);
             } else {
-                return p.rot_child(self, dir1.opposite());
+                let ret = p.rot_child(self, dir1.opposite());
+                p.update_from_child(op);
+                // self.update_from_child(op);
+                return ret;
             }
         }
+        // self.update_from_child(op);
         pd.map(|(p, _)| p)
     }
 
-    pub fn expose(self) {
+    pub fn expose(self, op: &Q) {
         let mut prev = None;
         let mut current = self;
-        while let Some(p) = current.splay() {
+        while let Some(p) = current.splay(op) {
             current.set_child(Right, prev);
             prev = Some(current);
             current = p;
         }
         current.set_child(Right, prev);
-        self.splay();
+        self.splay(op);
+        // self.update_from_child(op);
     }
 
-    pub fn cut(self) {
-        self.expose();
+    pub fn cut(self, op: &Q) {
+        self.expose(op);
         if let Some(node) = self.child(Left) {
             self.set_child(Left, None);
             node.set_parent(None);
@@ -246,24 +320,31 @@ impl<T> NodeRef<T> {
     }
 
     /// nodeを親としてパスselfをくっつける
-    pub fn link(self, node: Self) {
-        self.expose();
-        node.expose();
+    pub fn link(self, node: Self, op: &Q) {
+        self.expose(op);
+        self.update_from_child(op);
+        node.expose(op);
         node.link_child(Right, Some(self));
+        node.update_from_child(op);
+    }
+
+    pub fn update_and_get_query(&self, op: &Q) -> &T {
+        self.update_from_child(op);
+        self.query()
     }
 }
 
-pub struct Tree<T>(Option<NodeRef<T>>);
+pub struct Tree<T, Q>(Option<NodeRef<T, Q>>);
 
-impl<T> Clone for Tree<T> {
+impl<T, Q> Clone for Tree<T, Q> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T> Copy for Tree<T> {}
+impl<T, Q> Copy for Tree<T, Q> {}
 
-impl<T: fmt::Display> Tree<T> {
+impl<T: fmt::Display, Q> Tree<T, Q> {
     fn fmt_rec(&self, f: &mut fmt::Formatter, depth: usize) -> fmt::Result {
         if let Some(node) = self.0 {
             let node = node.node();
@@ -275,19 +356,19 @@ impl<T: fmt::Display> Tree<T> {
     }
 }
 
-impl<T: fmt::Display> fmt::Display for Tree<T> {
+impl<T: fmt::Display, Q> fmt::Display for Tree<T, Q> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.fmt_rec(f, 0)
     }
 }
 
-impl<T> From<NodeRef<T>> for Tree<T> {
-    fn from(value: NodeRef<T>) -> Self {
+impl<T, Q> From<NodeRef<T, Q>> for Tree<T, Q> {
+    fn from(value: NodeRef<T, Q>) -> Self {
         Tree(Some(value))
     }
 }
 
-impl<T: fmt::Debug> NodeRef<T> {
+impl<T: fmt::Debug, Q> NodeRef<T, Q> {
     fn debug_ancestor(self) {
         let mut current = self;
         print!("{:?}", current.node().value);
@@ -305,7 +386,7 @@ mod tests {
 
     #[test]
     fn dfs_test() {
-        let node = NodeRef::new(Node::new(100u32));
+        let node = NodeRef::new(Node::<_, ()>::new(100u32));
         let node70 = node
             .insert_val(Left, 50)
             .insert_val(Left, 30)
@@ -333,58 +414,89 @@ mod tests {
         node70.debug_ancestor();
     }
 
+    struct Add;
+    impl Query for Add {
+        type Elem = u32;
+        const IDENT: Self::Elem = 0;
+        fn query(&self, a: &Self::Elem, b: &Self::Elem) -> Self::Elem {
+            *a + *b
+        }
+    }
+    impl Commutative for Add {}
+
     #[test]
     fn splay_test() {
-        let node = NodeRef::new(Node::new(100u32));
-        let node70 = node
-            .insert_val(Left, 50)
-            .insert_val(Left, 30)
-            .insert_val(Right, 70);
-        node.insert_val(Right, 45);
+        let op = Add;
+        let node = (0..10u32)
+            .map(|i| NodeRef::new(Node::<_, Add>::new(i)))
+            .collect::<Vec<_>>();
+        node[3].link_child(Right, Some(node[4]));
+        node[3].link_child(Left, Some(node[5]));
+        node[3].update_from_child(&op);
+        node[2].link_child(Right, Some(node[3]));
+        node[2].link_child(Left, Some(node[6]));
+        node[2].update_from_child(&op);
+        node[1].link_child(Right, Some(node[2]));
+        node[1].update_from_child(&op);
+        node[7].link_child(Right, Some(node[9]));
+        node[7].link_child(Left, Some(node[8]));
+        node[7].update_from_child(&op);
+        node[0].link_child(Right, Some(node[7]));
+        node[0].link_child(Left, Some(node[1]));
+        node[0].update_from_child(&op);
 
-        println!("{}", Tree::from(node));
-        println!("{}", Tree::from(node70));
-        node70.splay();
-        println!("{}", Tree::from(node));
-        println!("{}", Tree::from(node70));
-        node70.debug_ancestor();
+        println!("{}", Tree::from(node[0]));
+        for &n in &node {
+            println!("{{{}, {}}}", n.val(), n.query());
+        }
+        println!();
+        node[4].splay(&op);
+        node[4].update_from_child(&op);
+        for &n in &node {
+            println!("--------------------");
+            println!("{}", Tree::from(n));
+            println!("{{{}, {}}}", n.val(), n.query());
+        }
+        println!();
 
-        node.splay();
-        println!("{}", Tree::from(node));
-        println!("{}", Tree::from(node70));
-        node70.debug_ancestor();
-
-        node70.dfs(|node, next| {
-            println!("{} -> {}", node.node().value, next.node().value);
-        });
+        node[9].splay(&op);
+        node[9].update_from_child(&op);
+        for &n in &node {
+            println!("--------------------");
+            println!("{}", Tree::from(n));
+            println!("{{{}, {}}}", n.val(), n.query());
+        }
+        println!();
     }
 
     #[test]
     fn expose_test() {
-        let nodes = (0usize..10)
-            .map(|i| NodeRef::new(Node::new(i)))
+        let op = Add;
+        let nodes = (0u32..10)
+            .map(|i| NodeRef::new(Node::<_, Add>::new(i)))
             .collect::<Vec<_>>();
-        nodes[0].link(nodes[1]);
-        nodes[1].link(nodes[2]);
-        nodes[2].link(nodes[4]);
-        nodes[3].link(nodes[4]);
-        nodes[5].link(nodes[4]);
-        nodes[6].link(nodes[1]);
-        nodes[7].link(nodes[6]);
-        nodes[8].link(nodes[1]);
+        nodes[0].link(nodes[1], &op);
+        nodes[1].link(nodes[2], &op);
+        nodes[2].link(nodes[4], &op);
+        nodes[3].link(nodes[4], &op);
+        nodes[5].link(nodes[4], &op);
+        nodes[6].link(nodes[1], &op);
+        nodes[7].link(nodes[6], &op);
+        nodes[8].link(nodes[1], &op);
 
         for &nodei in &nodes[0..9] {
-            nodei.expose();
+            nodei.expose(&op);
             println!("--------------------------");
             println!("{}", Tree::from(nodei));
+            println!("query: {}", nodei.update_and_get_query(&op));
         }
-        nodes[1].cut();
+        nodes[1].cut(&op);
 
         for &nodei in &nodes[0..9] {
-            nodei.expose();
+            nodei.expose(&op);
             println!("--------------------------");
             println!("{}", Tree::from(nodei));
+            println!("query: {}", nodei.update_and_get_query(&op));
         }
-
     }
 }
