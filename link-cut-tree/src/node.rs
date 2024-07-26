@@ -302,6 +302,10 @@ impl<T, Q> NodeRef<T, Q> {
             false
         }
     }
+
+    pub unsafe fn drop(self) {
+        drop(Box::from_raw(self.0.as_ptr()));
+    }
 }
 
 impl<T: Clone, Q: Query<Elem = T> + Commutative> NodeRef<T, Q> {
@@ -328,7 +332,7 @@ impl<T: Clone, Q: Query<Elem = T> + Commutative> NodeRef<T, Q> {
         let mut pd = self.parent_and_direction();
         while let Some((p, Some(dir1))) = pd {
             if let Some((gp, Some(dir2))) = p.parent_and_direction() {
-                let dir1 = if gp.push() {dir1.opposite()} else {dir1};
+                let dir1 = if gp.push() { dir1.opposite() } else { dir1 };
                 if p.push_either(dir1.opposite()) {
                     self.reverse();
                 }
@@ -364,10 +368,12 @@ impl<T: Clone, Q: Query<Elem = T> + Commutative> NodeRef<T, Q> {
         let mut prev = None;
         let mut current = self;
         while let Some(p) = current.splay(op) {
+            current.push();
             current.set_child(Right, prev);
             prev = Some(current);
             current = p;
         }
+        current.push();
         current.set_child(Right, prev);
         self.splay(op);
         // self.update_from_child(op);
@@ -582,24 +588,87 @@ mod tests {
         nodes[7].link(nodes[6], &op);
         nodes[8].link(nodes[1], &op);
 
-        nodes[7].evert(&op);
-        println!("{}", Tree::from(nodes[7]));
-        for &nodei in &nodes[0..9] {
-            nodei.expose(&op);
-            println!("--------------------------");
-            println!("{}", Tree::from(nodei));
-            println!("query: {}", nodei.update_and_get_query(&op));
-        }
         nodes[8].evert(&op);
         nodes[3].expose(&op);
-        println!("{}", nodes[3].update_and_get_query(&op));
+        assert_eq!(*nodes[3].update_and_get_query(&op), 18);
         nodes[4].evert(&op);
         nodes[5].expose(&op);
-        println!("{}", nodes[5].update_and_get_query(&op));
+        assert_eq!(*nodes[5].update_and_get_query(&op), 9);
         nodes[5].evert(&op);
         nodes[7].expose(&op);
-        // TODO: バグ修正
-        println!("{}", Tree::from(nodes[7]));
-        println!("{}", nodes[7].update_and_get_query(&op));
+        assert_eq!(*nodes[7].update_and_get_query(&op), 25);
+        nodes[7].evert(&op);
+        nodes[5].expose(&op);
+        assert_eq!(*nodes[5].update_and_get_query(&op), 25);
+        nodes[6].expose(&op);
+        assert_eq!(*nodes[6].update_and_get_query(&op), 13);
+        nodes[8].expose(&op);
+        assert_eq!(*nodes[8].update_and_get_query(&op), 22);
+        nodes[3].evert(&op);
+        nodes[5].expose(&op);
+        assert_eq!(*nodes[5].update_and_get_query(&op), 12);
+    }
+
+    #[test]
+    fn link_cut_test() {
+        let op = Add;
+        let nodes = (0u32..11).map(|i| NodeRef::new(Node::<_, Add>::new(i))).collect::<Vec<_>>();
+        let link = |n: usize, p: usize| nodes[n].link(nodes[p], &op);
+        let expose = |n: usize| nodes[n].expose(&op);
+        let query = |n: usize| *nodes[n].update_and_get_query(&op);
+        let evert = |n: usize| nodes[n].evert(&op);
+        let cut = |n: usize| nodes[n].cut(&op);
+        link(0, 3);
+        link(6, 3);
+        link(3, 4);
+        link(10, 5);
+        link(1, 5);
+        link(2, 5);
+        link(5, 4);
+        link(8, 9);
+        link(7, 9);
+        link(9, 4);
+        expose(0);
+        assert_eq!(query(0), 7);
+        expose(10);
+        assert_eq!(query(10), 19);
+        expose(8);
+        assert_eq!(query(8), 21);
+        evert(0);
+        expose(5);
+        assert_eq!(query(5), 12);
+        expose(1);
+        assert_eq!(query(1), 13);
+        expose(7);
+        assert_eq!(query(7), 23);
+        evert(2);
+        expose(1);
+        assert_eq!(query(1), 8);
+        cut(4);
+        expose(10);
+        assert_eq!(query(10), 17);
+        evert(8);
+        link(8, 10);
+        evert(3);
+        expose(5);
+        assert_eq!(query(5), 39);
+        expose(2);
+        assert_eq!(query(2), 41);
+        evert(1);
+        expose(7);
+        assert_eq!(query(7), 40);
+        evert(4);
+        cut(3);
+        evert(6);
+        link(6, 5);
+        evert(5);
+        expose(0);
+        assert_eq!(query(0), 14);
+        expose(4);
+        assert_eq!(query(4), 36);
+
+        unsafe {
+            nodes.into_iter().for_each(|node| node.drop());
+        }
     }
 }
