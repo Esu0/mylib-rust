@@ -334,7 +334,7 @@ impl<T, Q, OP: Query<ValT = T, QValT = Q> + Commutative> NodeRef<T, Q, OP> {
             }
             (Some(left), None) => *self.query_mut() = op.op_left(left.query(), val),
             (None, Some(right)) => *self.query_mut() = op.op_right(val, right.query()),
-            (None, None) => *self.query_mut() = op.from_val(val),
+            (None, None) => *self.query_mut() = op.val_to_query(val),
         };
     }
 

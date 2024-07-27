@@ -113,7 +113,7 @@ impl<T: Clone, OP: Query<ValT = T, QValT = T> + Commutative> LinkCutTree<T, OP> 
         }
     }
 
-    pub fn query(&mut self, i: usize, j: usize) -> Option<&T> {
+    pub fn path_query(&mut self, i: usize, j: usize) -> Option<&T> {
         let i = self.nodes[i];
         let j = self.nodes[j];
         i.evert(&self.op);
@@ -123,10 +123,55 @@ impl<T: Clone, OP: Query<ValT = T, QValT = T> + Commutative> LinkCutTree<T, OP> 
         j.update_from_child(&self.op);
         Some(unsafe { j.borrow_query() })
     }
+
+    pub fn parent(&mut self, root: usize, i: usize) -> Option<usize> {
+        if root == i {
+            return None;
+        }
+        let root = self.nodes[root];
+        let i = self.nodes[i];
+        root.evert(&self.op);
+        if root != i.expose(&self.op).1 {
+            return None;
+        }
+        use node::Direction::*;
+        let mut parent = i.child(Left).unwrap();
+        while let Some(next) = parent.child(Right) {
+            parent = next;
+        }
+        Some(parent.val().id)
+    }
 }
 
 impl<T, Q: Default> Default for LinkCutTree<T, Q> {
     fn default() -> Self {
         Self::new(Q::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn link_cut() {
+        let mut lct = LinkCutTree::from_iter(query::Add::new(), vec![3, 4, 1, 2, 0, 7]);
+        assert!(lct.path_query(0, 1).is_none());
+        assert!(lct.link(0, 1));
+        assert!(lct.link(2, 1));
+        assert!(lct.link(1, 3));
+        assert!(lct.link(0, 5));
+        assert!(lct.link(4, 5));
+        for i in 0..6 {
+            for j in 0..6 {
+                assert!(!lct.link(i, j));
+            }
+        }
+
+        assert_eq!(*lct.path_query(0, 4).unwrap(), 10);
+        assert_eq!(*lct.path_query(1, 5).unwrap(), 14);
+        assert!(lct.cut(1, 0));
+        assert!(lct.link(1, 4));
+        assert_eq!(*lct.path_query(2, 0).unwrap(), 15);
     }
 }
