@@ -39,7 +39,7 @@ mod node {
 
     use Direction::*;
 
-    use crate::query::{Commutative, Query};
+    use super::query::{Commutative, Query};
 
     impl<T, Q, OP> Clone for NodeRef<T, Q, OP> {
         fn clone(&self) -> Self {
@@ -704,6 +704,24 @@ impl<T: Clone, OP: Query<ValT = T, QValT = T> + Commutative> LinkCutTree<T, OP> 
         }
         j.update_from_child(&self.op);
         Some(unsafe { j.borrow_query() })
+    }
+
+    pub fn parent(&mut self, root: usize, i: usize) -> Option<usize> {
+        if root == i {
+            return None;
+        }
+        let root = self.nodes[root];
+        let i = self.nodes[i];
+        root.evert(&self.op);
+        if root != i.expose(&self.op).1 {
+            return None;
+        }
+        use node::Direction::*;
+        let mut parent = i.child(Left).unwrap();
+        while let Some(next) = parent.child(Right) {
+            parent = next;
+        }
+        Some(parent.val().id)
     }
 }
 

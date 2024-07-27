@@ -1,6 +1,5 @@
 mod node;
 pub mod query;
-pub mod tree;
 
 use node::{Node, NodeRef};
 use query::{Commutative, Query};

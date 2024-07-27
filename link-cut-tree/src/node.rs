@@ -38,7 +38,7 @@ impl Direction {
 
 use Direction::*;
 
-use crate::query::{Commutative, Query};
+use super::query::{Commutative, Query};
 
 impl<T, Q, OP> Clone for NodeRef<T, Q, OP> {
     fn clone(&self) -> Self {
