@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "fibonacci-heap",
     "lib-checker",
     "memory-pool",
     "persistent-array",

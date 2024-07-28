@@ -1,0 +1,10 @@
+[package]
+name = "fibonacci-heap"
+version = "0.1.0"
+edition.workspace = true
+resolver = "2"
+
+[dependencies]
+
+[dev-dependencies]
+proconio = "0.5.0"
