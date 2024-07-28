@@ -1,5 +1,6 @@
 mod node;
 pub mod query;
+pub mod index_base;
 
 use node::{Node, NodeRef};
 use query::{Commutative, Query};
