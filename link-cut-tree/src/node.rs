@@ -7,6 +7,24 @@ use std::{
     ptr::{addr_of, addr_of_mut, NonNull},
 };
 
+pub trait Forest {
+    type NodeRef: Copy + Eq;
+
+    fn child(&self, node: Self::NodeRef, dir: Direction) -> Option<Self::NodeRef>;
+    fn parent(&self, node: Self::NodeRef) -> Option<Self::NodeRef>;
+    fn set_child(&mut self, node: Self::NodeRef, dir: Direction, child: Option<Self::NodeRef>) -> Option<Self::NodeRef>;
+    fn set_parent(&mut self, node: Self::NodeRef, parent: Option<Self::NodeRef>) -> Option<Self::NodeRef>;
+
+    fn rot_child(&mut self, node: Self::NodeRef, child: Self::NodeRef, dir: Direction) -> Option<Self::NodeRef> {
+        let old_child = self.set_child(child, dir, Some(node));
+        let old_parent = self.set_parent(node, Some(child));
+        self.set_child(node, dir.opposite(), old_child);
+        if let Some(ch) = old_child {
+            self.set_parent(ch, Some(node));
+        }
+        old_parent
+    }
+}
 #[derive(Clone)]
 pub struct Node<T, Q, OP> {
     value: T,
