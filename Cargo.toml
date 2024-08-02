@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "lib-checker",
-    "memory-pool",
+    "memory-pool", "number",
     "persistent-array",
     "union-find",
     "z-algorithm",
