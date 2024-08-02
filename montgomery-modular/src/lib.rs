@@ -97,6 +97,20 @@ impl<const R: u64> Montgomery<R> {
     pub fn multiply_r(&self, a: u32) -> u32 {
         self.reduce(a as u64 * self.r2 as u64)
     }
+
+    /// Compute `a^exp % n`
+    pub fn pow(&self, a: u32, mut exp: u64) -> u32 {
+        let mut result = 1;
+        let mut base = self.multiply_r(a); // a * R
+        while exp > 0 {
+            if exp & 1 == 1 {
+                result = self.reduce(result as u64 * base as u64);
+            }
+            base = self.reduce(base as u64 * base as u64);
+            exp >>= 1;
+        }
+        result
+    }
 }
 
 #[cfg(test)]
@@ -134,5 +148,12 @@ mod tests {
             let b = rng.gen_range(0..n);
             assert_eq!(m.multiply(a, b) as u64, a as u64 * b as u64 % n as u64);
         }
+    }
+
+    #[test]
+    fn pow_test() {
+        let m = Montgomery::<256>::new(101);
+        assert_eq!(m.pow(2, 10), 2u32.pow(10) % 101);
+        assert_eq!(m.pow(43, 5), 43u32.pow(5) % 101);
     }
 }
