@@ -452,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn partition_point_test() {
+    fn upper_bound_test() {
         let segtree = [3u32, 5, 2, 1, 9, 11, 15, 3]
             .into_iter()
             .collect::<Segtree<_, operation::Add<_>>>();
@@ -494,10 +494,15 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn partition_point_panic() {
+    fn upper_bound_panic() {
         let segtree = [3u32, 5, 2, 1, 9, 11, 15, 3]
             .into_iter()
             .collect::<Segtree<_, operation::Add<_>>>();
         segtree.upper_bound(9, |v| *v <= 20);
+    }
+
+    #[test]
+    fn lower_bound_test() {
+        // TODO: lower_boundのテストを書く
     }
 }
