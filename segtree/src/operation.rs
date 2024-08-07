@@ -1,10 +1,19 @@
-use std::{ops, marker::PhantomData};
+use std::{marker::PhantomData, ops};
 
 pub trait Operator {
     type Query;
     const IDENT: Self::Query;
     fn op(&self, a: &Self::Query, b: &Self::Query) -> Self::Query;
+    fn op_assign_left(&self, a: &mut Self::Query, b: &Self::Query) {
+        *a = self.op(a, b);
+    }
+    fn op_assign_right(&self, a: &Self::Query, b: &mut Self::Query) {
+        *b = self.op(a, b);
+    }
 }
+
+/// An operator is idempotent if `op(a, a) = a` for all `a`.
+pub trait Idempotent: Operator {}
 
 trait HasZero {
     const ZERO: Self;
@@ -44,6 +53,35 @@ macro_rules! impl_trait_integer {
 impl_trait_integer!(i8, i16, i32, i64, i128, isize);
 impl_trait_integer!(u8, u16, u32, u64, u128, usize);
 
+macro_rules! impl_auto_trait_for_marker {
+    ($t:ident, $($u:ty),*) => {
+        $(
+            impl<$t> Clone for $u {
+                fn clone(&self) -> Self {
+                    *self
+                }
+            }
+
+            impl<$t> Copy for $u {}
+
+            impl<$t> Default for $u {
+                fn default() -> Self {
+                    Self(PhantomData)
+                }
+            }
+
+            impl<$t> PartialEq for $u {
+                fn eq(&self, _: &Self) -> bool {
+                    true
+                }
+            }
+
+            impl<$t> Eq for $u {}
+        )*
+    }
+}
+
+#[derive(Debug)]
 pub struct Add<T>(PhantomData<fn() -> T>);
 pub struct Mul<T>(PhantomData<fn() -> T>);
 
@@ -68,9 +106,15 @@ where
         a.clone() * b.clone()
     }
 }
-
 pub struct Max<T>(PhantomData<fn() -> T>);
 pub struct Min<T>(PhantomData<fn() -> T>);
+
+pub const fn max<T>() -> Max<T> {
+    Max(PhantomData)
+}
+pub const fn min<T>() -> Min<T> {
+    Min(PhantomData)
+}
 
 impl<T> Operator for Max<T>
 where
@@ -87,6 +131,8 @@ where
     }
 }
 
+impl<T> Idempotent for Max<T> where Max<T>: Operator {}
+
 impl<T> Operator for Min<T>
 where
     T: Ord + Clone + HasMax,
@@ -101,3 +147,15 @@ where
         }
     }
 }
+
+impl<T> Idempotent for Min<T> where Min<T>: Operator {}
+
+impl<'a, T: Operator> Operator for &'a T {
+    type Query = T::Query;
+    const IDENT: Self::Query = T::IDENT;
+    fn op(&self, a: &Self::Query, b: &Self::Query) -> Self::Query {
+        T::op(self, a, b)
+    }
+}
+
+impl_auto_trait_for_marker!(T, Add<T>, Mul<T>, Max<T>, Min<T>);
