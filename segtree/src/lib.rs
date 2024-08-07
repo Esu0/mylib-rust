@@ -1,7 +1,9 @@
 pub mod operation;
 use operation::{Idempotent, Operator};
 use std::{
-    cmp::Ordering, iter, ops::{Bound, Deref, DerefMut, RangeBounds}
+    cmp::Ordering,
+    iter,
+    ops::{Bound, Deref, DerefMut, RangeBounds},
 };
 
 #[derive(Debug, Clone)]
@@ -159,8 +161,14 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
         }
     }
 
+    pub fn update(&mut self, index: usize, value: T) {
+        let i = index + self.len;
+        self.data[i] = value;
+        self.update_val(i);
+    }
+
     /// `pred(self.query(l..j))`が`true`となる最大の`j`をO(log(n))で求める。
-    pub fn partition_point<P>(&self, l: usize, mut pred: P) -> usize
+    pub fn upper_bound<P>(&self, l: usize, mut pred: P) -> usize
     where
         P: FnMut(&T) -> bool,
     {
@@ -171,7 +179,7 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
             }
             _ => {}
         };
-        let stop = self.data.len() / (self.len - l).next_power_of_two() - 1;
+        let stop = self.data.len() / ((self.len - l + 1).next_power_of_two() >> 1) - 1;
         let mut l = l + self.len;
         let mut l_query = OP::IDENT;
         loop {
@@ -187,10 +195,57 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
             if l == stop {
                 return self.len;
             }
-            l >>= 1;
-            l += 1;
+            l = (l >> 1) + 1;
         }
-        todo!()
+        while l < self.len {
+            l <<= 1;
+            let next_query = self.op.op(&l_query, &self.data[l]);
+            if pred(&next_query) {
+                l_query = next_query;
+                l += 1;
+            }
+        }
+        l - self.len
+    }
+
+    /// `pred(self.query(j..r))`が`true`となる最小の`j`をO(log(n))で求める。
+    pub fn lower_bound<P>(&self, r: usize, mut pred: P) -> usize
+    where
+        P: FnMut(&T) -> bool,
+    {
+        if r > self.len {
+            panic!("index {r} out of range for slice of length {}", self.len())
+        }
+        if r == 0 {
+            return 0;
+        }
+        let stop = self.len >> r.ilog2();
+        let mut r = r + self.len - 1;
+        let mut r_query = OP::IDENT;
+        loop {
+            while r & 1 == 1 {
+                r >>= 1;
+            }
+            let next_query = self.op.op(&self.data[r], &r_query);
+            if pred(&next_query) {
+                r_query = next_query;
+            } else {
+                break;
+            }
+            if r == stop {
+                return 0;
+            }
+            r = (r >> 1) - 1;
+        }
+        while r < self.len {
+            r = (r << 1) + 1;
+            let next_query = self.op.op(&self.data[r], &r_query);
+            if pred(&next_query) {
+                r_query = next_query;
+                r -= 1;
+            }
+        }
+        r + 1 - self.len
     }
 }
 
@@ -376,5 +431,73 @@ mod tests {
         assert_eq!(segtree.query(3..6), 4);
         assert_eq!(segtree.query(..3), 5);
         println!("{segtree:?}");
+    }
+
+    #[test]
+    fn fill_test() {
+        let mut segtree = [100, 200, 15, 40]
+            .into_iter()
+            .collect::<Segtree<_, operation::Min<_>>>();
+
+        assert_eq!(segtree.query(..), 15);
+        segtree.fill(10);
+        assert_eq!(segtree.query(..), 10);
+        assert_eq!(segtree.query(1..), 10);
+        assert_eq!(segtree.query(1..3), 10);
+
+        segtree.fill_with(|| -20);
+        assert_eq!(segtree.query(..), -20);
+        assert_eq!(segtree.query(1..), -20);
+        assert_eq!(segtree.query(1..3), -20);
+    }
+
+    #[test]
+    fn partition_point_test() {
+        let segtree = [3u32, 5, 2, 1, 9, 11, 15, 3]
+            .into_iter()
+            .collect::<Segtree<_, operation::Add<_>>>();
+
+        assert_eq!(segtree.upper_bound(0, |v| *v <= 20), 5);
+        assert_eq!(segtree.upper_bound(1, |v| *v <= 20), 5);
+        assert_eq!(segtree.upper_bound(4, |v| *v <= 25), 6);
+        assert_eq!(segtree.upper_bound(3, |v| *v <= 100), 8);
+        assert_eq!(segtree.upper_bound(8, |v| *v <= 20), 8);
+    }
+
+    #[test]
+    fn max_query_test() {
+        let mut segtree = [23i32, 12, -3, 0, 3, -2, 7, 8]
+            .into_iter()
+            .collect::<Segtree<_, operation::Max<_>>>();
+
+        assert_eq!(segtree.query(..), 23);
+        assert_eq!(segtree.query(1..), 12);
+        assert_eq!(segtree.query(2..), 8);
+        assert_eq!(segtree.query(1..6), 12);
+        assert_eq!(segtree.query(2..6), 3);
+        assert_eq!(segtree.query(2..=6), 7);
+
+        segtree.update(2, 5);
+        assert_eq!(segtree.query(..), 23);
+        assert_eq!(segtree.query(2..), 8);
+        assert_eq!(segtree.query(2..6), 5);
+        assert_eq!(segtree.query(2..=6), 7);
+
+        segtree.update(0, 10);
+        eprintln!("{:?}", &segtree[..]);
+        // assert_eq!(segtree.partition_point(0, |v| *v < 12), 1);
+        // assert_eq!(segtree.partition_point(0, |v| *v < 13), 8);
+        // assert_eq!(segtree.partition_point(1, |v| *v < 12), 1);
+        assert_eq!(segtree.upper_bound(2, |v| *v < 12), 8);
+        assert_eq!(segtree.upper_bound(2, |v| *v < 7), 6);
+    }
+
+    #[test]
+    #[should_panic]
+    fn partition_point_panic() {
+        let segtree = [3u32, 5, 2, 1, 9, 11, 15, 3]
+            .into_iter()
+            .collect::<Segtree<_, operation::Add<_>>>();
+        segtree.upper_bound(9, |v| *v <= 20);
     }
 }
