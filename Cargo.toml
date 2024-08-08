@@ -4,6 +4,7 @@ members = [
     "lib-checker",
     "memory-pool",
     "persistent-array",
+    "segtree",
     "union-find",
     "z-algorithm",
 ]
