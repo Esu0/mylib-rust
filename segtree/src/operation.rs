@@ -77,11 +77,17 @@ macro_rules! impl_auto_trait_for_marker {
             }
 
             impl<$t> Eq for $u {}
+
+            impl<$t> ::core::fmt::Debug for $u {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+                    write!(f, "{}", ::core::any::type_name::<$u>())
+                }
+            }
         )*
     }
 }
 
-#[derive(Debug)]
+// #[derive(Debug)]
 pub struct Add<T>(PhantomData<fn() -> T>);
 pub struct Mul<T>(PhantomData<fn() -> T>);
 
