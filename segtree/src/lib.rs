@@ -226,6 +226,10 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
             while r & 1 == 1 {
                 r >>= 1;
             }
+            if r == 0 {
+                r = 1;
+            }
+            eprintln!("{r}");
             let next_query = self.op.op(&self.data[r], &r_query);
             if pred(&next_query) {
                 r_query = next_query;
@@ -485,9 +489,9 @@ mod tests {
 
         segtree.update(0, 10);
         eprintln!("{:?}", &segtree[..]);
-        // assert_eq!(segtree.partition_point(0, |v| *v < 12), 1);
-        // assert_eq!(segtree.partition_point(0, |v| *v < 13), 8);
-        // assert_eq!(segtree.partition_point(1, |v| *v < 12), 1);
+        assert_eq!(segtree.upper_bound(0, |v| *v < 12), 1);
+        assert_eq!(segtree.upper_bound(0, |v| *v < 13), 8);
+        assert_eq!(segtree.upper_bound(1, |v| *v < 12), 1);
         assert_eq!(segtree.upper_bound(2, |v| *v < 12), 8);
         assert_eq!(segtree.upper_bound(2, |v| *v < 7), 6);
     }
@@ -503,6 +507,21 @@ mod tests {
 
     #[test]
     fn lower_bound_test() {
-        // TODO: lower_boundのテストを書く
+        let segtree = [3u32, 4, 2, 1, 4, 2, 6, 3]
+            .into_iter()
+            .collect::<Segtree<_, operation::Add<_>>>();
+
+        assert_eq!(segtree.lower_bound(8, |v| *v <= 20), 2);
+        assert_eq!(segtree.lower_bound(8, |v| *v <= 22), 1);
+        assert_eq!(segtree.lower_bound(8, |v| *v < 22), 2);
+        assert_eq!(segtree.lower_bound(7, |v| *v <= 20), 1);
+        assert_eq!(segtree.lower_bound(7, |v| *v < 20), 1);
+        assert_eq!(segtree.lower_bound(7, |v| *v < 19), 2);
+        assert_eq!(segtree.lower_bound(5, |v| *v < 4), 5);
+        assert_eq!(segtree.lower_bound(5, |v| *v <= 4), 4);
+        for i in 0..=segtree.len() {
+            assert_eq!(segtree.lower_bound(i, |_| true), 0);
+            assert_eq!(segtree.lower_bound(i, |_| false), i);
+        }
     }
 }
