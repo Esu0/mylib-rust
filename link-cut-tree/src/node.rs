@@ -25,6 +25,7 @@ pub trait Forest {
         old_parent
     }
 }
+
 #[derive(Clone)]
 pub struct Node<T, Q, OP> {
     value: T,
@@ -56,7 +57,7 @@ impl Direction {
 
 use Direction::*;
 
-use super::query::{Commutative, Query};
+use super::query::{Commutative, Operator};
 
 impl<T, Q, OP> Clone for NodeRef<T, Q, OP> {
     fn clone(&self) -> Self {
@@ -337,7 +338,7 @@ impl<T, Q, OP> NodeRef<T, Q, OP> {
     }
 }
 
-impl<T, Q, OP: Query<ValT = T, QValT = Q> + Commutative> NodeRef<T, Q, OP> {
+impl<T, Q, OP: Operator<ValT = T, QValT = Q> + Commutative> NodeRef<T, Q, OP> {
     pub fn update_from_child(mut self, op: &OP) {
         let Node {
             value: ref val,
@@ -348,10 +349,10 @@ impl<T, Q, OP: Query<ValT = T, QValT = Q> + Commutative> NodeRef<T, Q, OP> {
         } = self.node_mut();
         match (*left, *right) {
             (Some(left), Some(right)) => {
-                *query_mut = op.op(&op.op_left(left.query(), val), right.query())
+                *query_mut = op.op(&op.op(left.query(), &op.val_to_query(val)), right.query())
             }
-            (Some(left), None) => *self.query_mut() = op.op_left(left.query(), val),
-            (None, Some(right)) => *self.query_mut() = op.op_right(val, right.query()),
+            (Some(left), None) => *self.query_mut() = op.op(left.query(), &op.val_to_query(val)),
+            (None, Some(right)) => *self.query_mut() = op.op(&op.val_to_query(val), right.query()),
             (None, None) => *self.query_mut() = op.val_to_query(val),
         };
     }
@@ -554,18 +555,15 @@ mod tests {
     // }
 
     struct Add;
-    impl Query for Add {
+    impl Operator for Add {
         type ValT = u32;
         type QValT = u32;
         const IDENT: Self::QValT = 0;
         fn op(&self, a: &Self::QValT, b: &Self::QValT) -> Self::QValT {
             a + b
         }
-        fn op_left(&self, a: &Self::QValT, b: &Self::ValT) -> Self::QValT {
-            a + b
-        }
-        fn op_right(&self, a: &Self::ValT, b: &Self::QValT) -> Self::QValT {
-            a + b
+        fn val_to_query(&self, val: &Self::ValT) -> Self::QValT {
+            *val
         }
     }
     impl Commutative for Add {}

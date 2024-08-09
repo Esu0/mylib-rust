@@ -1,8 +1,9 @@
 mod node;
 pub mod query;
+pub mod edge_query;
 
 use node::{Node, NodeRef};
-use query::{Commutative, Query};
+use query::{Commutative, Operator};
 
 struct NodeValue<T> {
     value: T,
@@ -37,29 +38,26 @@ impl<T, OP> LinkCutTree<T, OP> {
     }
 }
 
-impl<T, OP: Query<ValT = T, QValT = T>> Query for NodeOP<OP> {
+impl<T, OP: Operator<ValT = T, QValT = T>> Operator for NodeOP<OP> {
     type ValT = NodeValue<T>;
     type QValT = T;
     const IDENT: Self::QValT = OP::IDENT;
-    fn op_left(&self, a: &Self::QValT, b: &Self::ValT) -> Self::QValT {
-        self.inner.op_left(a, &b.value)
-    }
-    fn op_right(&self, a: &Self::ValT, b: &Self::QValT) -> Self::QValT {
-        self.inner.op_right(&a.value, b)
-    }
     fn op(&self, a: &Self::QValT, b: &Self::QValT) -> Self::QValT {
         self.inner.op(a, b)
+    }
+    fn val_to_query(&self, val: &Self::ValT) -> Self::QValT {
+        self.inner.val_to_query(&val.value)
     }
 }
 
 impl<OP> Commutative for NodeOP<OP>
 where
     OP: Commutative,
-    NodeOP<OP>: Query,
+    NodeOP<OP>: Operator,
 {
 }
 
-impl<T: Clone, OP: Query<ValT = T, QValT = T> + Commutative> LinkCutTree<T, OP> {
+impl<T: Clone, OP: Operator<ValT = T, QValT = T> + Commutative> LinkCutTree<T, OP> {
     pub fn from_iter<I>(op: OP, iter: I) -> Self
     where
         I: IntoIterator<Item = T>,
