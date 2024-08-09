@@ -6,6 +6,7 @@ members = [
     "persistent-array",
     "segtree",
     "union-find",
+    "util",
     "z-algorithm",
 ]
 
