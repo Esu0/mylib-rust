@@ -1,6 +1,7 @@
+pub mod edge_query;
 mod node;
 pub mod query;
-pub mod index_base;
+mod util;
 
 use node::{Node, NodeRef};
 use query::{Commutative, Query};

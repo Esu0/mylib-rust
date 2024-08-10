@@ -731,6 +731,4 @@ impl<T, Q: Default> Default for LinkCutTree<T, Q> {
     }
 }
 
-fn main() {
-    
-}
+fn main() {}

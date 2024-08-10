@@ -14,17 +14,6 @@ pub trait Query {
 
 pub trait Commutative: Query {}
 
-pub struct Noop<T>(PhantomData<fn() -> T>);
-
-impl<T> Query for Noop<T> {
-    type ValT = T;
-    type QValT = ();
-    const IDENT: Self::QValT = ();
-    fn op_left(&self, _: &Self::QValT, _: &Self::ValT) -> Self::QValT {}
-    fn op_right(&self, _: &Self::ValT, _: &Self::QValT) -> Self::QValT {}
-    fn op(&self, _: &Self::QValT, _: &Self::QValT) -> Self::QValT {}
-}
-
 pub struct Add<T>(PhantomData<fn() -> T>);
 
 impl<T> Add<T> {
@@ -73,3 +62,99 @@ impl<T: ops::Add<Output = T> + HasZero + Clone> Query for Add<T> {
 }
 
 impl<T> Commutative for Add<T> where Add<T>: Query {}
+
+pub trait PathOperator {
+    type V;
+    type E;
+    type Path;
+
+    fn val_to_path(&self, val: &Self::V) -> Self::Path;
+    fn connect_path(&self, p1: &Self::Path, edge: &Self::E, p2: &Self::Path) -> Self::Path;
+    fn to_reversable(self) -> Reversable<Self>
+    where
+        Self: Sized,
+    {
+        Reversable(self)
+    }
+}
+
+pub trait ReversablePathOperator: PathOperator {
+    fn reverse_path(&self, path: &mut Self::Path);
+}
+
+pub struct Reversable<O>(O);
+
+impl<P: Clone, O: PathOperator<Path = P>> PathOperator for Reversable<O> {
+    type V = O::V;
+    type E = O::E;
+    type Path = (P, P);
+
+    fn val_to_path(&self, val: &Self::V) -> Self::Path {
+        let p = self.0.val_to_path(val);
+        (p.clone(), p)
+    }
+
+    fn connect_path(&self, p1: &Self::Path, edge: &Self::E, p2: &Self::Path) -> Self::Path {
+        let p = self.0.connect_path(&p1.0, edge, &p2.0);
+        let p_reverse = self.0.connect_path(&p2.1, edge, &p1.1);
+        (p, p_reverse)
+    }
+}
+
+impl<P: Clone, O: PathOperator<Path = P>> ReversablePathOperator for Reversable<O> {
+    fn reverse_path(&self, path: &mut Self::Path) {
+        std::mem::swap(&mut path.0, &mut path.1);
+    }
+}
+
+impl<'a, O: PathOperator> PathOperator for &'a O {
+    type V = O::V;
+    type E = O::E;
+    type Path = O::Path;
+
+    fn val_to_path(&self, val: &Self::V) -> Self::Path {
+        O::val_to_path(self, val)
+    }
+
+    fn connect_path(&self, p1: &Self::Path, edge: &Self::E, p2: &Self::Path) -> Self::Path {
+        O::connect_path(self, p1, edge, p2)
+    }
+}
+
+impl<'a, O: ReversablePathOperator> ReversablePathOperator for &'a O {
+    fn reverse_path(&self, path: &mut Self::Path) {
+        O::reverse_path(self, path)
+    }
+}
+
+pub fn noop<V, E>() -> Noop<V, E> {
+    Noop(PhantomData)
+}
+
+pub struct Noop<V, E>(PhantomData<fn() -> (V, E)>);
+
+impl<V, E> Default for Noop<V, E> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<V, E> Clone for Noop<V, E> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<V, E> Copy for Noop<V, E> {}
+
+impl<V, E> PathOperator for Noop<V, E> {
+    type V = V;
+    type E = E;
+    type Path = ();
+    fn val_to_path(&self, _: &Self::V) -> Self::Path {}
+    fn connect_path(&self, _: &Self::Path, _: &Self::E, _: &Self::Path) -> Self::Path {}
+}
+
+impl<V, E> ReversablePathOperator for Noop<V, E> {
+    fn reverse_path(&self, _: &mut Self::Path) {}
+}
