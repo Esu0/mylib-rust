@@ -88,8 +88,36 @@ impl<const MOD: u32> Add for ModInt<MOD> {
     }
 }
 
+impl<const MOD: u32> Add<u32> for ModInt<MOD> {
+    type Output = Self;
+
+    fn add(self, rhs: u32) -> Self::Output {
+        self.add_const(Self(rhs % MOD))
+    }
+}
+
+impl<const MOD: u32> Add<u64> for ModInt<MOD> {
+    type Output = Self;
+
+    fn add(self, rhs: u64) -> Self::Output {
+        self.add_const(Self((rhs % MOD as u64) as u32))
+    }
+}
+
 impl<const MOD: u32> AddAssign for ModInt<MOD> {
     fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+
+impl<const MOD: u32> AddAssign<u32> for ModInt<MOD> {
+    fn add_assign(&mut self, rhs: u32) {
+        *self = *self + rhs;
+    }
+}
+
+impl<const MOD: u32> AddAssign<u64> for ModInt<MOD> {
+    fn add_assign(&mut self, rhs: u64) {
         *self = *self + rhs;
     }
 }
@@ -102,8 +130,36 @@ impl<const MOD: u32> Sub for ModInt<MOD> {
     }
 }
 
+impl<const MOD: u32> Sub<u32> for ModInt<MOD> {
+    type Output = Self;
+
+    fn sub(self, rhs: u32) -> Self::Output {
+        self.sub_const(Self(rhs % MOD))
+    }
+}
+
+impl<const MOD: u32> Sub<u64> for ModInt<MOD> {
+    type Output = Self;
+
+    fn sub(self, rhs: u64) -> Self::Output {
+        self.sub_const(Self((rhs % MOD as u64) as u32))
+    }
+}
+
 impl<const MOD: u32> SubAssign for ModInt<MOD> {
     fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
+}
+
+impl<const MOD: u32> SubAssign<u32> for ModInt<MOD> {
+    fn sub_assign(&mut self, rhs: u32) {
+        *self = *self - rhs;
+    }
+}
+
+impl<const MOD: u32> SubAssign<u64> for ModInt<MOD> {
+    fn sub_assign(&mut self, rhs: u64) {
         *self = *self - rhs;
     }
 }
@@ -116,8 +172,36 @@ impl<const MOD: u32> Mul for ModInt<MOD> {
     }
 }
 
+impl<const MOD: u32> Mul<u32> for ModInt<MOD> {
+    type Output = Self;
+
+    fn mul(self, rhs: u32) -> Self::Output {
+        Self((self.0 as u64 * rhs as u64 % MOD as u64) as u32)
+    }
+}
+
+impl<const MOD: u32> Mul<u64> for ModInt<MOD> {
+    type Output = Self;
+
+    fn mul(self, rhs: u64) -> Self::Output {
+        Self((self.0 as u64 * (rhs % MOD as u64) % MOD as u64) as u32)
+    }
+}
+
 impl<const MOD: u32> MulAssign for ModInt<MOD> {
     fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
+}
+
+impl<const MOD: u32> MulAssign<u32> for ModInt<MOD> {
+    fn mul_assign(&mut self, rhs: u32) {
+        *self = *self * rhs;
+    }
+}
+
+impl<const MOD: u32> MulAssign<u64> for ModInt<MOD> {
+    fn mul_assign(&mut self, rhs: u64) {
         *self = *self * rhs;
     }
 }
