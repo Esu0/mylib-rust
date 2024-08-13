@@ -13,6 +13,7 @@ pub struct Node<V, E, Q> {
     right: Option<Edge<E, NodeRef<Self>>>,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Edge<T, NodeRef> {
     val: T,
     node: NodeRef,
@@ -20,6 +21,19 @@ pub struct Edge<T, NodeRef> {
 
 #[repr(transparent)]
 pub struct NodeRef<Node>(NonNull<Node>);
+
+impl<V, E, Q> Node<V, E, Q> {
+    pub fn new(value: V, query: Q) -> Self {
+        Self {
+            value,
+            query,
+            reverse: false,
+            parent: None,
+            left: None,
+            right: None,
+        }
+    }
+}
 
 impl<Node> Clone for NodeRef<Node> {
     fn clone(&self) -> Self {
@@ -44,7 +58,8 @@ impl<Node> Hash for NodeRef<Node> {
 
     fn hash_slice<H: std::hash::Hasher>(data: &[Self], state: &mut H)
     where
-        Self: Sized, {
+        Self: Sized,
+    {
         let ptr = data.as_ptr() as *const NonNull<Node>;
         let len = data.len();
         NonNull::<Node>::hash_slice(unsafe { std::slice::from_raw_parts(ptr, len) }, state);
@@ -64,6 +79,10 @@ impl<V, E, Q> NodeRef<Node<V, E, Q>> {
 
     fn node_mut(&mut self) -> &mut Node<V, E, Q> {
         unsafe { self.0.as_mut() }
+    }
+
+    fn set_parent(mut self, parent: Edge<E, Self>) {
+        self.node_mut().parent = Some(parent);
     }
 
     fn rot_right(self, parent_edge: Edge<E, Self>) -> Option<Edge<E, Self>> {
@@ -160,6 +179,9 @@ impl<V, E, Q> NodeRef<Node<V, E, Q>> {
         }
     }
 
+    /// `parent_edge`が指すノードを中心に回転を行う。
+    ///
+    /// `parent_edge`が指すノードの親ノードを指す辺を返す。
     fn rot(self, parent_edge: Edge<E, Self>, dir: Direction) -> Option<Edge<E, Self>> {
         match dir {
             Left => self.rot_left(parent_edge),
@@ -180,7 +202,10 @@ impl<V, E, Q> NodeRef<Node<V, E, Q>> {
     }
 
     fn take_parent_edge_and_direction(mut self) -> Option<(Option<Direction>, Edge<E, Self>)> {
-        self.node_mut().parent.take().map(|edge| (self.which_child(edge.node), edge))
+        self.node_mut()
+            .parent
+            .take()
+            .map(|edge| (self.which_child(edge.node), edge))
     }
 
     fn to_tree<O: PathOperator<V = V, E = E, Path = Q> + Copy>(self, op: O) -> RawTree<Self, O> {
@@ -189,6 +214,10 @@ impl<V, E, Q> NodeRef<Node<V, E, Q>> {
 
     fn to_path(self) -> Path<V, E, Q> {
         Path(self)
+    }
+
+    fn to_bintree(self) -> Bintree<V, E, Q> {
+        Bintree(self)
     }
 }
 
@@ -247,14 +276,74 @@ impl<V, E, Q, O> RawTree<NodeRef<Node<V, E, Q>>, O>
 where
     O: PathOperator<V = V, E = E, Path = Q> + Copy,
 {
-    pub fn splay(self) {
-        let RawTree { node, op } = self;
+    /// `vertices.len() == edges.len() + 1 && vertices.len() >= 1`
+    fn make_list(
+        vertices: impl IntoIterator<Item = V>,
+        edges: impl IntoIterator<Item = E>,
+        op: O,
+    ) -> Vec<Self>
+    where
+        E: Clone,
+    {
+        let mut iter_v = vertices.into_iter();
+        let left_v = iter_v.next().unwrap();
+        let left_q = op.val_to_path(&left_v);
+        let mut left = NodeRef::from_boxed(Box::new(Node::new(left_v, left_q)));
+        let mut res = Vec::with_capacity(iter_v.size_hint().0);
+        res.push(RawTree { node: left, op });
+        for (v, e) in iter_v.zip(edges) {
+            let q_prev = &left.node().query;
+            let p2 = &op.val_to_path(&v);
+            let mut new_node = Node::new(v, op.connect_path(q_prev, &e, p2));
+            new_node.left = Some(Edge {
+                val: e.clone(),
+                node: left,
+            });
+            let new_node_ref = NodeRef::from_boxed(Box::new(new_node));
+            left.node_mut().parent = Some(Edge {
+                val: e.clone(),
+                node: new_node_ref,
+            });
+            res.push(RawTree {
+                node: new_node_ref,
+                op,
+            });
+            left = new_node_ref;
+        }
+        res
+    }
+
+    fn update_query_from_child(self) {
+        let Self { mut node, op } = self;
+        let mut q = op.val_to_path(&node.node().value);
+        if let Some(ref left) = node.node().left {
+            let Edge { node, val } = left;
+            let left_query = &node.node().query;
+            let new_q = op.connect_path(left_query, val, &q);
+            q = new_q;
+        }
+        if let Some(ref right) = node.node().right {
+            let Edge { node, val } = right;
+            let right_query = &node.node().query;
+            let new_q = op.connect_path(&q, val, right_query);
+            q = new_q;
+        }
+        node.node_mut().query = q;
+    }
+
+    pub fn splay(self) -> Option<Edge<E, NodeRef<Node<V, E, Q>>>> {
+        let Self { node, op } = self;
         let mut edge_to_parent_opt = node.take_parent_edge_and_direction();
         while let Some((Some(dir1), edge_to_parent)) = edge_to_parent_opt {
-            if let Some((Some(dir2), edge_to_grandparent)) = edge_to_parent.node.take_parent_edge_and_direction() {
+            let p = edge_to_parent.node;
+            if let Some((Some(dir2), edge_to_grandparent)) =
+                edge_to_parent.node.take_parent_edge_and_direction()
+            {
+                let gp = edge_to_grandparent.node;
                 if dir1 == dir2 {
-                    let gp = edge_to_grandparent.node;
-                    let next_p = edge_to_parent.node.rot(edge_to_grandparent, dir2.opposite());
+                    let next_p = edge_to_parent
+                        .node
+                        .rot(edge_to_grandparent, dir2.opposite());
                     node.rot(edge_to_parent, dir1.opposite());
                     edge_to_parent_opt = next_p.map(|edge| (gp.which_child(edge.node), edge));
                 } else {
@@ -263,11 +352,61 @@ where
                     let next_p = parent_ref.rot(edge_to_grandparent, dir1);
                     edge_to_parent_opt = next_p.map(|edge| (node.which_child(edge.node), edge));
                 }
+                gp.to_tree(op).update_query_from_child();
+                p.to_tree(op).update_query_from_child();
             } else {
-                node.rot(edge_to_parent, dir1.opposite());
-                return;
+                let ret = node.rot(edge_to_parent, dir1.opposite());
+                p.to_tree(op).update_query_from_child();
+                // self.update_query_from_child();
+                return ret;
             }
         }
+        // self.update_query_from_child();
+        edge_to_parent_opt.map(|(_, edge)| edge)
+    }
+
+    pub fn expose(self)
+    where
+        E: Clone,
+    {
+        let mut node = self;
+        let mut right = None;
+        while let Some(edge_to_parent) = node.splay() {
+            node.node.node_mut().right = right;
+            right = Some(Edge {
+                val: edge_to_parent.val.clone(),
+                node: node.node,
+            });
+            let p = edge_to_parent.node;
+            node.node.node_mut().parent = Some(edge_to_parent);
+            node.node = p;
+        }
+        node.node.node_mut().right = right;
+        self.splay();
+    }
+
+    pub fn link(self, parent: NodeRef<Node<V, E, Q>>, edge: E)
+    where 
+        E: Clone,
+    {
+        self.expose();
+        self.node.set_parent(Edge {
+            val: edge.clone(),
+            node: parent,
+        });
+    }
+
+    pub fn cut(mut self) -> Option<Edge<E, NodeRef<Node<V, E, Q>>>>
+    where 
+        E: Clone,
+    {
+        self.expose();
+        let left = self.node.node_mut().left.take();
+        if let Some(ref left) = left {
+            let mut node = left.node;
+            node.node_mut().parent = None;
+        }
+        left
     }
 }
 
@@ -288,16 +427,40 @@ impl<V: fmt::Display, E: fmt::Display, Q> NodeRef<Node<V, E, Q>> {
         Ok(())
     }
 }
+
 impl<V: fmt::Display, E: fmt::Display, Q> fmt::Display for Path<V, E, Q> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt_path_rec(f)
     }
 }
 
+struct Bintree<V, E, Q>(NodeRef<Node<V, E, Q>>);
+impl<V: fmt::Display, E, Q> NodeRef<Node<V, E, Q>> {
+    fn fmt_tree_rec(self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
+        let node = self.node();
+        if let Some(ref right) = node.right {
+            let node = right.node;
+            node.fmt_tree_rec(f, depth + 1)?;
+        }
+        writeln!(f, "{: >width$}", node.value, width = depth * 4)?;
+        if let Some(ref left) = node.left {
+            let node = left.node;
+            node.fmt_tree_rec(f, depth + 1)?;
+        }
+        Ok(())
+    }
+}
+
+impl<V: fmt::Display, E, Q> fmt::Display for Bintree<V, E, Q> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt_tree_rec(f, 0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::super::query;
+    use super::*;
 
     #[test]
     fn rot_test() {
@@ -309,5 +472,44 @@ mod tests {
         println!("{}", node[0].to_path());
         node[8].to_tree(query::noop()).splay();
         println!("{}", node[8].to_path());
+    }
+
+    #[derive(Clone, Copy)]
+    struct EdgeVerticeAdd;
+    impl query::PathOperator for EdgeVerticeAdd {
+        type V = usize;
+        type E = usize;
+        type Path = (usize, usize);
+        fn val_to_path(&self, val: &Self::V) -> Self::Path {
+            (0, *val)
+        }
+        fn connect_path(&self, p1: &Self::Path, edge: &Self::E, p2: &Self::Path) -> Self::Path {
+            (p1.0 + *edge + p2.0, p1.1 + p2.1)
+        }
+    }
+
+    impl query::ReversablePathOperator for EdgeVerticeAdd {
+        fn reverse_path(&self, _: &mut Self::Path) {}
+    }
+    #[test]
+    fn splay_test() {
+
+        let nodes = RawTree::make_list(1..=10, 1..=9, EdgeVerticeAdd);
+        eprintln!("{}", nodes.last().unwrap().node.to_path());
+        eprintln!("{:?}", nodes.last().unwrap().node.node().query);
+        // nodes[0].splay();
+        // eprintln!("{}", nodes[0].node.to_bintree());
+        // nodes[1].splay();
+        for &t in &nodes {
+            t.splay();
+            eprintln!("{}:", t.node.node().value);
+            eprintln!("{:?}", t.node.node().query);
+            eprintln!("{}", t.node.to_bintree());
+        }
+    }
+
+    #[test]
+    fn link_cut_test() {
+
     }
 }
