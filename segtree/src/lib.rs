@@ -39,9 +39,18 @@ impl<T, OP> Deref for Segtree<T, OP> {
 }
 
 impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
+    fn get_unchecked(&self, index: usize) -> &T {
+        unsafe { self.data.get_unchecked(index) }
+    }
+
+    fn get_unchecked_mut(&mut self, index: usize) -> &mut T {
+        unsafe { self.data.get_unchecked_mut(index) }
+    }
+
     fn eval(mut self) -> Self {
         for i in (1..self.len).rev() {
-            self.data[i] = self.op.op(&self.data[i * 2], &self.data[i * 2 + 1]);
+            let new_val = self.op.op(self.get_unchecked(i * 2), self.get_unchecked(i * 2 + 1));
+            *self.get_unchecked_mut(i) = new_val;
         }
         self
     }
@@ -133,10 +142,10 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
         while l < r {
             if r & 1 == 1 {
                 r -= 1;
-                self.op.op_assign_right(&self.data[r], &mut query_r);
+                self.op.op_assign_right(self.get_unchecked(r), &mut query_r);
             }
             if l & 1 == 1 {
-                self.op.op_assign_left(&mut query_l, &self.data[l]);
+                self.op.op_assign_left(&mut query_l, self.get_unchecked(l));
                 l += 1;
             }
             l >>= 1;
@@ -157,13 +166,14 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
     fn update_val(&mut self, mut i: usize) {
         while i > 1 {
             i >>= 1;
-            self.data[i] = self.op.op(&self.data[i * 2], &self.data[i * 2 + 1]);
+            let new_val = self.op.op(self.get_unchecked(i * 2), self.get_unchecked(i * 2 + 1));
+            *self.get_unchecked_mut(i) = new_val;
         }
     }
 
     pub fn update(&mut self, index: usize, value: T) {
         let i = index + self.len;
-        self.data[i] = value;
+        *self.get_unchecked_mut(i) = value;
         self.update_val(i);
     }
 
@@ -186,7 +196,7 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
             while l & 1 == 0 {
                 l >>= 1;
             }
-            let next_query = self.op.op(&l_query, &self.data[l]);
+            let next_query = self.op.op(&l_query, self.get_unchecked(l));
             if pred(&next_query) {
                 l_query = next_query;
             } else {
@@ -199,7 +209,7 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
         }
         while l < self.len {
             l <<= 1;
-            let next_query = self.op.op(&l_query, &self.data[l]);
+            let next_query = self.op.op(&l_query, self.get_unchecked(l));
             if pred(&next_query) {
                 l_query = next_query;
                 l += 1;
@@ -208,6 +218,7 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
         l - self.len
     }
 
+    // TODO: Verify this implementation
     /// `pred(self.query(j..r))`が`true`となる最小の`j`をO(log(n))で求める。
     pub fn lower_bound<P>(&self, r: usize, mut pred: P) -> usize
     where
@@ -258,12 +269,16 @@ impl<T, OP: Idempotent<Query = T>> Segtree<T, OP> {
     where
         T: Clone,
     {
-        self.data[1..].fill(value);
+        if !self.data.is_empty() {
+            self.data[1..].fill(value);
+        }
     }
 
     /// fは呼ばれるたびに同じ値を返す必要がある。そうでない場合、セグメント木の性質が壊れる。
     pub fn fill_with<F: FnMut() -> T>(&mut self, f: F) {
-        self.data[1..].fill_with(f);
+        if !self.data.is_empty() {
+            self.data[1..].fill_with(f);
+        }
     }
 }
 
