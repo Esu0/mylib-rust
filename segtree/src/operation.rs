@@ -53,7 +53,7 @@ macro_rules! impl_trait_integer {
 impl_trait_integer!(i8, i16, i32, i64, i128, isize);
 impl_trait_integer!(u8, u16, u32, u64, u128, usize);
 
-macro_rules! impl_auto_trait_for_marker {
+macro_rules! impl_auto_trait_simple {
     ($t:ident, $($u:ty),*) => {
         $(
             impl<$t> Clone for $u {
@@ -84,6 +84,38 @@ macro_rules! impl_auto_trait_for_marker {
                 }
             }
         )*
+    }
+}
+
+macro_rules! impl_auto_trait {
+    ($($t:ident),*; $u:ty) => {
+        impl<$($t),*> Clone for $u {
+            fn clone(&self) -> Self {
+                *self
+            }
+        }
+
+        impl<$($t),*> Copy for $u {}
+
+        impl<$($t),*> Default for $u {
+            fn default() -> Self {
+                Self(PhantomData)
+            }
+        }
+
+        impl<$($t),*> PartialEq for $u {
+            fn eq(&self, _: &Self) -> bool {
+                true
+            }
+        }
+
+        impl<$($t),*> Eq for $u {}
+
+        impl<$($t),*> ::core::fmt::Debug for $u {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+                write!(f, "{}", ::core::any::type_name::<$u>())
+            }
+        }
     }
 }
 
@@ -164,4 +196,124 @@ impl<'a, T: Operator> Operator for &'a T {
     }
 }
 
-impl_auto_trait_for_marker!(T, Add<T>, Mul<T>, Max<T>, Min<T>);
+impl_auto_trait_simple!(T, Add<T>, Mul<T>, Max<T>, Min<T>);
+
+pub trait Map {
+    type OP: Operator;
+    type Elem;
+    const IDENT: Self::Elem;
+
+    fn apply(
+        &self,
+        q: &<Self::OP as Operator>::Query,
+        m: &Self::Elem,
+    ) -> <Self::OP as Operator>::Query;
+    fn apply_assign(&self, q: &mut <Self::OP as Operator>::Query, m: &Self::Elem) {
+        let new_q = self.apply(q, m);
+        *q = new_q;
+    }
+    fn composite(&self, a: &Self::Elem, b: &Self::Elem) -> Self::Elem;
+    fn composite_assign(&self, a: &mut Self::Elem, b: &Self::Elem) {
+        let new_a = self.composite(a, b);
+        *a = new_a;
+    }
+}
+
+impl<'a, T: Map> Map for &'a T {
+    type OP = T::OP;
+    type Elem = T::Elem;
+    const IDENT: Self::Elem = T::IDENT;
+    fn apply(
+        &self,
+        q: &<Self::OP as Operator>::Query,
+        m: &Self::Elem,
+    ) -> <Self::OP as Operator>::Query {
+        T::apply(self, q, m)
+    }
+    fn apply_assign(&self, q: &mut <Self::OP as Operator>::Query, m: &Self::Elem) {
+        T::apply_assign(self, q, m)
+    }
+    fn composite(&self, a: &Self::Elem, b: &Self::Elem) -> Self::Elem {
+        T::composite(self, a, b)
+    }
+    fn composite_assign(&self, a: &mut Self::Elem, b: &Self::Elem) {
+        T::composite_assign(self, a, b)
+    }
+}
+
+pub struct Update<OP>(PhantomData<fn() -> OP>);
+
+pub fn update<OP>() -> Update<OP> {
+    Update(PhantomData)
+}
+
+impl<OP> Map for Update<OP>
+where
+    OP: Idempotent,
+    <OP as Operator>::Query: Clone,
+{
+    type OP = OP;
+    type Elem = Option<<OP as Operator>::Query>;
+    const IDENT: Self::Elem = None;
+    fn apply(
+        &self,
+        q: &<Self::OP as Operator>::Query,
+        m: &Self::Elem,
+    ) -> <Self::OP as Operator>::Query {
+        match m {
+            Some(m) => m.clone(),
+            None => q.clone(),
+        }
+    }
+
+    fn apply_assign(&self, q: &mut <Self::OP as Operator>::Query, m: &Self::Elem) {
+        if let Some(m) = m {
+            q.clone_from(m);
+        }
+    }
+
+    fn composite(&self, a: &Self::Elem, b: &Self::Elem) -> Self::Elem {
+        match b {
+            Some(b) => Some(b.clone()),
+            None => a.clone(),
+        }
+    }
+
+    fn composite_assign(&self, a: &mut Self::Elem, b: &Self::Elem) {
+        if b.is_some() {
+            a.clone_from(b);
+        }
+    }
+}
+
+pub struct RangeAdd<F, OP>(PhantomData<fn() -> (F, OP)>);
+
+pub fn range_add<F, OP>() -> RangeAdd<F, OP> {
+    RangeAdd(PhantomData)
+}
+
+impl<T, F> Map for RangeAdd<F, Min<T>>
+where
+    Min<T>: Operator<Query = T>,
+    T: ops::Add<F, Output = T> + Clone,
+    F: HasZero + ops::Add<Output = F> + Clone,
+{
+    type OP = Min<T>;
+    type Elem = F;
+    const IDENT: Self::Elem = F::ZERO;
+
+    fn apply(
+        &self,
+        q: &<Self::OP as Operator>::Query,
+        m: &Self::Elem,
+    ) -> <Self::OP as Operator>::Query {
+        q.clone() + m.clone()
+    }
+
+    fn composite(&self, a: &Self::Elem, b: &Self::Elem) -> Self::Elem {
+        a.clone() + b.clone()
+    }
+}
+
+impl_auto_trait_simple!(OP, Update<OP>);
+impl_auto_trait!(F, OP; RangeAdd<F, OP>);

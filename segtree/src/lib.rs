@@ -1,3 +1,4 @@
+pub mod lazy;
 pub mod operation;
 use operation::{Idempotent, Operator};
 use std::{
@@ -38,6 +39,33 @@ impl<T, OP> Deref for Segtree<T, OP> {
     }
 }
 
+/// 戻り値を`(l, r)`とすると以下が保証される。
+///
+/// * `l <= r <= self.len()`
+fn get_lr<R: RangeBounds<usize>>(size: usize, range: R) -> (usize, usize) {
+    use Bound::*;
+    let l = match range.start_bound() {
+        Excluded(s) => s
+            .checked_add(1)
+            .unwrap_or_else(|| panic!("attempted to index slice from after maximum usize")),
+        Included(s) => *s,
+        Unbounded => 0,
+    };
+    let r = match range.end_bound() {
+        Excluded(e) => *e,
+        Included(e) => e
+            .checked_add(1)
+            .unwrap_or_else(|| panic!("attempted to index slice up to maximum usize")),
+        Unbounded => size,
+    };
+    if l > r {
+        panic!("slice index starts at {l} but ends at {r}");
+    } else if r > size {
+        panic!("range end index {r} out of range for slice of length {size}");
+    }
+    (l, r)
+}
+
 impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
     fn get_unchecked(&self, index: usize) -> &T {
         unsafe { self.data.get_unchecked(index) }
@@ -49,7 +77,9 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
 
     fn eval(mut self) -> Self {
         for i in (1..self.len).rev() {
-            let new_val = self.op.op(self.get_unchecked(i * 2), self.get_unchecked(i * 2 + 1));
+            let new_val = self
+                .op
+                .op(self.get_unchecked(i * 2), self.get_unchecked(i * 2 + 1));
             *self.get_unchecked_mut(i) = new_val;
         }
         self
@@ -105,36 +135,8 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
         self.len == 0
     }
 
-    /// 戻り値を`(l, r)`とすると以下が保証される。
-    ///
-    /// * `l <= r <= self.len()`
-    fn get_lr<R: RangeBounds<usize>>(&self, range: R) -> (usize, usize) {
-        use Bound::*;
-        let size = self.len;
-        let l = match range.start_bound() {
-            Excluded(s) => s
-                .checked_add(1)
-                .unwrap_or_else(|| panic!("attempted to index slice from after maximum usize")),
-            Included(s) => *s,
-            Unbounded => 0,
-        };
-        let r = match range.end_bound() {
-            Excluded(e) => *e,
-            Included(e) => e
-                .checked_add(1)
-                .unwrap_or_else(|| panic!("attempted to index slice up to maximum usize")),
-            Unbounded => size,
-        };
-        if l > r {
-            panic!("slice index starts at {l} but ends at {r}");
-        } else if r > size {
-            panic!("range end index {r} out of range for slice of length {size}");
-        }
-        (l, r)
-    }
-
     pub fn query<R: RangeBounds<usize>>(&self, range: R) -> T {
-        let (mut l, mut r) = self.get_lr(range);
+        let (mut l, mut r) = get_lr(self.len, range);
         l += self.len;
         r += self.len;
         let mut query_l = OP::IDENT;
@@ -166,7 +168,9 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
     fn update_val(&mut self, mut i: usize) {
         while i > 1 {
             i >>= 1;
-            let new_val = self.op.op(self.get_unchecked(i * 2), self.get_unchecked(i * 2 + 1));
+            let new_val = self
+                .op
+                .op(self.get_unchecked(i * 2), self.get_unchecked(i * 2 + 1));
             *self.get_unchecked_mut(i) = new_val;
         }
     }
