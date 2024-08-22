@@ -1,17 +1,66 @@
-use std::borrow::Borrow;
+use std::{borrow::Borrow, cmp, fmt, ptr::{addr_of, addr_of_mut, NonNull}};
 
 #[derive(Debug)]
 pub struct RedBlackTree<T> {
-    root: Option<Box<Node<T>>>,
+    root: Option<NodeRef<T>>,
 }
 
 #[derive(Debug)]
 struct Node<T> {
     value: T,
-    left: Option<Box<Node<T>>>,
-    right: Option<Box<Node<T>>>,
     color: Color,
-    rank: u16,
+    left: Option<NodeRef<T>>,
+    right: Option<NodeRef<T>>,
+    parent: Option<NodeRef<T>>,
+}
+
+#[derive(Debug)]
+struct NodeRef<T>(NonNull<Node<T>>);
+
+impl<T> Clone for NodeRef<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for NodeRef<T> {}
+
+impl<T> PartialEq for NodeRef<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<T> Eq for NodeRef<T> {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Direction {
+    Left,
+    Right,
+}
+
+use Direction::*;
+
+impl Direction {
+    fn opposite(self) -> Self {
+        match self {
+            Left => Right,
+            Right => Left,
+        }
+    }
+}
+
+impl TryFrom<cmp::Ordering> for Direction {
+    type Error = ();
+
+    fn try_from(value: cmp::Ordering) -> Result<Self, Self::Error> {
+        use cmp::Ordering::*;
+        match value {
+            Less => Ok(Left),
+            Equal => Err(()),
+            Greater => Ok(Right),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,202 +69,305 @@ enum Color {
     Black,
 }
 
+use Color::*;
+
 impl Color {
     fn flip(self) -> Self {
         match self {
-            Color::Red => Color::Black,
-            Color::Black => Color::Red,
+            Red => Black,
+            Black => Red,
         }
     }
 }
 
-impl<T> Node<T> {
-    // 左回転
-    fn rotl(&mut self) {
-        let mut right = self.right.take().unwrap();
-        self.right = right.left.take();
-        std::mem::swap(self, &mut *right);
-        self.left = Some(right);
+struct SearchResult<T> {
+    dir: Option<Direction>,
+    node: NodeRef<T>,
+}
+
+impl<T> SearchResult<T> {
+    fn new(dir: Option<Direction>, node: NodeRef<T>) -> Self {
+        Self { dir, node }
     }
 
-    // 右回転
-    fn rotr(&mut self) {
-        let mut left = self.left.take().unwrap();
-        self.left = left.right.take();
-        std::mem::swap(self, &mut *left);
-        self.right = Some(left);
+    fn insert(self, value: T) -> Option<(NodeRef<T>, Option<NodeRef<T>>)> {
+        self.dir.map(|dir| self.node.insert(value, dir))
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Direction {
-    Left,
-    Right,
+fn unwrap_debug<T>(value: Option<T>) -> T {
+    debug_assert!(value.is_some());
+    unsafe {
+        value.unwrap_unchecked()
+    }
 }
 
-impl<T: Ord> Node<T> {
-    fn insert(this: &mut Option<Box<Self>>, value: T) {
-        if let (Color::Red, Color::Red, _) = Self::insert_rec(this, value) {
-            this.as_mut().unwrap().color = Color::Black;
+impl<T> NodeRef<T> {
+    fn node(&self) -> &Node<T> {
+        unsafe { self.0.as_ref() }
+    }
+
+    fn node_mut(&mut self) -> &mut Node<T> {
+        unsafe { self.0.as_mut() }
+    }
+
+    fn borrow<'a>(self) -> &'a Node<T> {
+        unsafe { self.0.as_ref() }
+    }
+
+    fn child(self, dir: Direction) -> Option<Self> {
+        unsafe {
+            let ptr = match dir {
+                Left => addr_of!((*self.0.as_ptr()).left),
+                Right => addr_of!((*self.0.as_ptr()).right),
+            };
+            *ptr
         }
     }
 
-    fn insert_rec(this: &mut Option<Box<Self>>, value: T) -> (Color, Color, Direction) {
-        if let Some(root) = this {
-            match value.cmp(&root.value) {
-                std::cmp::Ordering::Less => {
-                    let (col1, col2, dir) = Self::insert_rec(&mut root.left, value);
-                    if col1 == Color::Red && col2 == Color::Red {
-                        debug_assert_eq!(root.color, Color::Black);
-                        if root.right.as_ref().is_some_and(|r| r.color == Color::Red) {
-                            root.color = Color::Red;
-                            root.rank += 1;
-                            root.left.as_mut().unwrap().color = Color::Black;
-                            root.right.as_mut().unwrap().color = Color::Black;
-                            (Color::Red, Color::Black, Direction::Right)
-                        } else {
-                            if dir == Direction::Right {
-                                root.left.as_mut().unwrap().rotl();
-                            }
-                            root.rotr();
-                            debug_assert_eq!(root.color, Color::Red);
-                            root.color = Color::Black;
-                            root.right.as_mut().unwrap().color = Color::Red;
-                            (Color::Black, Color::Red, Direction::Left)
-                        }
-                    } else {
-                        (root.color, col1, Direction::Left)
-                    }
-                }
-                std::cmp::Ordering::Equal => (Color::Black, Color::Black, Direction::Left),
-                std::cmp::Ordering::Greater => {
-                    let (col1, col2, dir) = Self::insert_rec(&mut root.right, value);
-                    if col1 == Color::Red && col2 == Color::Red {
-                        debug_assert_eq!(root.color, Color::Black);
-                        if root.left.as_ref().is_some_and(|l| l.color == Color::Red) {
-                            root.color = Color::Red;
-                            root.rank += 1;
-                            root.left.as_mut().unwrap().color = Color::Black;
-                            root.right.as_mut().unwrap().color = Color::Black;
-                            (Color::Red, Color::Black, Direction::Left)
-                        } else {
-                            if dir == Direction::Left {
-                                root.right.as_mut().unwrap().rotr();
-                            }
-                            root.rotl();
-                            debug_assert_eq!(root.color, Color::Red);
-                            root.color = Color::Black;
-                            root.left.as_mut().unwrap().color = Color::Red;
-                            (Color::Black, Color::Red, Direction::Right)
-                        }
-                    } else {
-                        (root.color, col1, Direction::Right)
-                    }
-                }
-            }
+    fn parent(self) -> Option<Self> {
+        unsafe { (*self.0.as_ptr()).parent }
+    }
+
+    fn set_child(self, child: Option<Self>, dir: Direction) -> Option<Self> {
+        unsafe {
+            let ptr = match dir {
+                Left => addr_of_mut!((*self.0.as_ptr()).left),
+                Right => addr_of_mut!((*self.0.as_ptr()).right),
+            };
+            let old = *ptr;
+            ptr.write(child);
+            old
+        }
+    }
+
+    fn set_parent(self, parent: Option<Self>) -> Option<Self> {
+        unsafe {
+            let ptr = addr_of_mut!((*self.0.as_ptr()).parent);
+            let old = *ptr;
+            ptr.write(parent);
+            old
+        }
+    }
+
+    fn which_child(self, parent: Self) -> Direction {
+        if parent.child(Left) == Some(self) {
+            Left
         } else {
-            *this = Some(Box::new(Node {
-                value,
-                left: None,
-                right: None,
-                color: Color::Red,
-                rank: 1,
-            }));
-            (Color::Red, Color::Black, Direction::Left)
+            Right
         }
     }
 
-    fn remove<Q>(this: &mut Option<Box<Self>>, key: &Q) -> Option<T>
-    where
-        Q: ?Sized + Ord,
-        T: Borrow<Q>,
-    {
-        todo!()
+    fn set_color(self, col: Color) {
+        unsafe {
+            let ptr = addr_of_mut!((*self.0.as_ptr()).color);
+            ptr.write(col);
+        }
     }
 
-    fn remove_rec<Q>(this: &mut Option<Box<Self>>, key: &Q) -> Option<T>
-    where
-        Q: ?Sized + Ord,
-        T: Borrow<Q>,
-    {
-        if let Some(root) = this {
-            match key.cmp(root.value.borrow()) {
-                std::cmp::Ordering::Less => {
-                    let value = Self::remove_rec(&mut root.left, key);
-                    if value.is_some() {
-                        todo!()
-                    } else {
-                        todo!()
-                    }
-                }
-                std::cmp::Ordering::Equal => {
-                    if let Some(m) = Self::remove_min(&mut root.right) {
-                        // Some(std::mem::replace(&mut root.value, m))
-                        todo!()
-                    } else {
-                        todo!()
-                    }
-                }
-                std::cmp::Ordering::Greater => {
-                    let value = Self::remove_rec(&mut root.right, key);
-                    if value.is_some() {
-                        todo!()
-                    } else {
-                        todo!()
-                    }
-                }
+    fn rot(self, parent: Self, dir: Direction) -> Option<Self> {
+        let old_child = self.set_child(Some(parent), dir);
+        if let Some(child) = old_child {
+            child.set_parent(Some(parent));
+        }
+        parent.set_child(old_child, dir.opposite());
+        parent.set_parent(Some(self))
+    }
+
+    fn new_node_ref(value: T, color: Color) -> Self {
+        Self(NonNull::from(Box::leak(Box::new(Node {
+            value,
+            color,
+            left: None,
+            right: None,
+            parent: None,
+        }))))
+    }
+
+    fn insert(self, value: T, dir: Direction) -> (Self, Option<Self>) {
+        let new_node = Node {
+            value,
+            color: Color::Red,
+            left: None,
+            right: None,
+            parent: Some(self),
+        };
+        let mut ret = None;
+        // ループ不変条件: ノードnの色は赤であり、p-n間を除いて木全体が赤黒木の条件を満たす。すなわち、pの色は赤でも構わない。
+        // p-n間は実際はポインタで連結されていないが、辺があるものとして扱う。
+        let new_node_ref = Self(NonNull::from(Box::leak(Box::new(new_node))));
+        let mut n = new_node_ref;
+        self.set_child(Some(n), dir);
+        while let Some(mut p) = n.parent() {
+            let dir = n.which_child(p);
+            if p.node().color == Black {
+                break;
             }
-        } else {
-            None
-        }
-    }
-
-    fn remove_min(this: &mut Option<Box<Self>>) -> Option<(T, bool)> {
-        if let Some(root) = this {
-            if let Some((value, flg)) = Self::remove_min(&mut root.left) {
-                if flg {
-                    let root = if root.right.as_ref().is_some_and(|r| r.color == Color::Red) {
-                        root.right.as_mut().unwrap().color = Color::Black;
-                        debug_assert_eq!(root.color, Color::Black);
-                        root.color = Color::Red;
-                        root.rotl();
-                        root.left.as_mut().unwrap()
-                    } else if root.color == Color::Red
-                        && root.right.as_ref().is_some_and(|r| {
-                            !r.left.as_ref().is_some_and(|l| l.color == Color::Red)
-                                && !r.right.as_ref().is_some_and(|r| r.color == Color::Red)
-                        })
-                    {
-                        root.right.as_mut().unwrap().color = Color::Red;
-                        root.rank -= 1;
-                        return Some((value, true));
-                    } else {
-                        root
-                    };
-                    
-                    todo!()
+            if let Some(g) = p.parent() {
+                let dir2 = p.which_child(g);
+                let u = g.child(dir2.opposite());
+                if let Some(u) = u {
+                    if u.node().color == Red {
+                        u.set_color(Black);
+                        p.set_color(Black);
+                        g.set_color(Red);
+                        n = g;
+                        continue;
+                    }
+                }
+                if dir != dir2 {
+                    n.rot(p, dir2);
+                    p = n;
+                }
+                let pp_opt = p.rot(g, dir2.opposite());
+                if let Some(pp) = pp_opt {
+                    pp.set_child(Some(p), g.which_child(pp));
                 } else {
-                    Some((value, false))
+                    ret = Some(p);
                 }
-                // drop(root);
+                p.set_parent(pp_opt);
+                p.set_color(Black);
+                g.set_color(Red);
+                break;
             } else {
-                let right = root.right.take();
-                if root.color == Color::Black {
-                    let value = std::mem::replace(this, right).unwrap().value;
-                    if this.as_ref().is_some_and(|r| r.color == Color::Red) {
-                        this.as_mut().unwrap().color = Color::Black;
-                        Some((value, false))
-                    } else {
-                        Some((value, true))
-                    }
-                } else {
-                    Some((std::mem::replace(this, right).unwrap().value, false))
-                }
-                // drop(root);
+                p.set_color(Black);
+                break;
             }
-        } else {
-            None
         }
+        (new_node_ref, ret)
+    }
+
+    fn search(self, mut f: impl FnMut(&T) -> Option<Direction>) -> SearchResult<T> {
+        let mut n = self;
+        loop {
+            let node = n.node();
+            let dir = f(&node.value);
+            if let Some(dir) = dir {
+                if let Some(next_n) = n.child(dir) {
+                    n = next_n;
+                } else {
+                    return SearchResult::new(Some(dir), n);
+                }
+            } else {
+                return SearchResult::new(None, n);
+            }
+        }
+    }
+    fn destroy(self) -> Node<T> {
+        unsafe {
+            *Box::from_raw(self.0.as_ptr())
+        }
+    }
+
+    fn remove_black_leaf(self) -> (Node<T>, Option<Option<Self>>) {
+        let node = self.destroy();
+        let mut n = None;
+        let mut p_opt = node.parent.map(|p| (p.which_child(self), p));
+        let mut ret = None;
+        loop {
+            if let Some((dir, p)) = p_opt {
+                let mut p_col = p.node().color;
+                let mut s = unwrap_debug(p.child(dir.opposite()));
+                let mut c = s.child(dir);
+                let mut d = s.child(dir.opposite());
+                let mut s_col = s.node().color;
+                let mut c_col = c.map_or(Black, |c| c.node().color);
+                let mut d_col = d.map_or(Black, |d| d.node().color);
+
+                match (p_col, s_col, c_col, d_col) {
+                    (Black, Black, Black, Black) => {
+                        s.set_color(Red);
+                        n = Some(p);
+                        p_opt = p.parent().map(|p| (p.which_child(p), p));
+                        continue;
+                    }
+                    (Black, Red, _, _) => {
+                        let g = s.rot(p, dir);
+                        s.set_parent(g);
+                        if let Some(g) = g {
+                            g.set_child(Some(s), p.which_child(g));
+                        } else {
+                            ret = Some(Some(s));
+                        }
+                        s.set_color(Black);
+                        p.set_color(Red);
+                        s = unwrap_debug(c);
+                        c = s.child(dir);
+                        d = s.child(dir.opposite());
+                        p_col = Red;
+                        s_col = Black;
+                        c_col = c.map_or(Black, |c| c.node().color);
+                        d_col = d.map_or(Black, |d| d.node().color);
+                    }
+                    (Red, _, Black, Black) => {
+                        p.set_color(Black);
+                        s.set_color(Red);
+                        break;
+                    }
+                    _ => {}
+                }
+                if let (Black, Red, Black) = (s_col, c_col, d_col) {
+                    let c = unwrap_debug(c);
+                    c.rot(s, dir.opposite());
+                    p.set_child(Some(c), dir.opposite());
+                    c.set_parent(Some(p));
+                    c.set_color(Black);
+                    s.set_color(Red);
+                    s = c;
+                    d = Some(s);
+                    s_col = Black;
+                    d_col = Red;
+                }
+
+                if let (Black, Red) = (s_col, d_col) {
+                    let g = s.rot(p, dir);
+                    s.set_parent(g);
+                    if let Some(g) = g {
+                        g.set_child(Some(s), p.which_child(g));
+                    } else {
+                        ret = Some(Some(s));
+                    }
+                    s.set_color(p_col);
+                    p.set_color(Black);
+                    unwrap_debug(d).set_color(Black);
+                }
+                break;
+            } else {
+                ret = Some(n);
+                break;
+            }
+        }
+        (node, ret)
+    }
+
+    fn remove_leaf(self) -> (Node<T>, Option<Option<Self>>) {
+        let node = self.destroy();
+        
+    }
+}
+
+impl<T: fmt::Display> NodeRef<T> {
+    fn fmt_rec(self, f: &mut fmt::Formatter<'_>, depth: usize) -> fmt::Result {
+        let node = self.node();
+        if let Some(right) = node.right {
+            right.fmt_rec(f, depth + 1)?;
+        }
+        let col_char = match node.color {
+            Red => '🔴',
+            Black => '⚫',
+        };
+        writeln!(f, "{:indent$}{}{}", "", col_char, node.value, indent = depth * 2)?;
+        if let Some(left) = node.left {
+            left.fmt_rec(f, depth + 1)?;
+        }
+        Ok(())
+    }
+}
+
+struct Tree<T>(NodeRef<T>);
+impl<T: fmt::Display> fmt::Display for Tree<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt_rec(f, 0)
     }
 }
 
@@ -227,7 +379,14 @@ impl<T> RedBlackTree<T> {
 
 impl<T: Ord> RedBlackTree<T> {
     pub fn insert(&mut self, value: T) {
-        Node::insert(&mut self.root, value);
+        if let Some(root) = self.root {
+            let result = root.search(|v| Direction::try_from(value.cmp(v)).ok());
+            if let Some((_, Some(new_root))) = result.insert(value) {
+                self.root = Some(new_root);
+            }
+        } else {
+            self.root = Some(NodeRef::new_node_ref(value, Black));
+        }
     }
 
     pub fn get<Q>(&self, key: &Q) -> Option<&T>
@@ -235,15 +394,63 @@ impl<T: Ord> RedBlackTree<T> {
         Q: ?Sized + Ord,
         T: Borrow<Q>,
     {
-        let mut current = &self.root;
-        while let Some(node) = current {
-            match key.cmp(node.value.borrow()) {
-                std::cmp::Ordering::Less => current = &node.left,
-                std::cmp::Ordering::Equal => return Some(&node.value),
-                std::cmp::Ordering::Greater => current = &node.right,
+        // let mut current = &self.root;
+        // while let Some(node) = current {
+        //     match key.cmp(node.value.borrow()) {
+        //         std::cmp::Ordering::Less => current = &node.left,
+        //         std::cmp::Ordering::Equal => return Some(&node.value),
+        //         std::cmp::Ordering::Greater => current = &node.right,
+        //     }
+        // }
+        // None
+        self.root.and_then(|root| {
+            let result = root.search(|v| Direction::try_from(key.cmp(v.borrow())).ok());
+            if result.dir.is_some() {
+                None
+            } else {
+                Some(&result.node.borrow().value)
             }
+        })
+    }
+
+    pub fn remove<Q>(&mut self, key: &Q) -> Option<T>
+    where
+        Q: ?Sized + Ord,
+        T: Borrow<Q>,
+    {
+        let root = self.root?;
+        let result = root.search(|v| Direction::try_from(key.cmp(v.borrow())).ok());
+        if result.dir.is_none() {
+            let noderef = result.node;
+            let node = noderef.node();
+            let col = node.color;
+            let left = node.left;
+            let right = node.right;
+            match (left, right) {
+                (None, None) => {
+                    if col == Red {
+                        let p = node.parent;
+                        if let Some(p) = p {
+                            p.set_child(None, noderef.which_child(p));
+                        } else {
+                            self.root = None;
+                        }
+                        Some(node.value)
+                    } else {
+                        let (node, new_root) = noderef.remove_black_leaf();
+                        if let Some(new_root) = new_root {
+                            self.root = new_root;
+                        }
+                        Some(node.value)
+                    }
+                }
+                (Some(l), None) => {
+                    
+                }
+            }
+        } else {
+            None
         }
-        None
     }
 }
 
@@ -256,6 +463,18 @@ impl<T> Default for RedBlackTree<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #[test]
+    // fn insert_node_test() {
+    //     let root = NodeRef::new_node_ref(0, Black);
+    //     root.insert(1, Left);
+    //     let node2 = root.insert(2, Right);
+    //     node2.insert(3, Left);
+    //     let node4 = node2.insert(4, Right);
+    //     node4.insert(5, Left).insert(6, Left).insert(7, Left).insert(8, Right);
+    //     node2.insert(9, Right);
+    //     println!("{}", Tree(root));
+    // }
 
     #[test]
     fn insert_test() {
