@@ -1,4 +1,8 @@
-use std::{borrow::Borrow, cmp, fmt, ptr::{addr_of, addr_of_mut, NonNull}};
+use std::{
+    borrow::Borrow,
+    cmp, fmt,
+    ptr::{addr_of, addr_of_mut, NonNull},
+};
 
 #[derive(Debug)]
 pub struct RedBlackTree<T> {
@@ -97,9 +101,7 @@ impl<T> SearchResult<T> {
 
 fn unwrap_debug<T>(value: Option<T>) -> T {
     debug_assert!(value.is_some());
-    unsafe {
-        value.unwrap_unchecked()
-    }
+    unsafe { value.unwrap_unchecked() }
 }
 
 impl<T> NodeRef<T> {
@@ -254,15 +256,17 @@ impl<T> NodeRef<T> {
         }
     }
     fn destroy(self) -> Node<T> {
-        unsafe {
-            *Box::from_raw(self.0.as_ptr())
-        }
+        unsafe { *Box::from_raw(self.0.as_ptr()) }
     }
 
     fn remove_black_leaf(self) -> (Node<T>, Option<Option<Self>>) {
         let node = self.destroy();
         let mut n = None;
-        let mut p_opt = node.parent.map(|p| (p.which_child(self), p));
+        let mut p_opt = node.parent.map(|p| {
+            let dir = self.which_child(p);
+            p.set_child(None, dir);
+            (dir, p)
+        });
         let mut ret = None;
         loop {
             if let Some((dir, p)) = p_opt {
@@ -273,12 +277,11 @@ impl<T> NodeRef<T> {
                 let mut s_col = s.node().color;
                 let mut c_col = c.map_or(Black, |c| c.node().color);
                 let mut d_col = d.map_or(Black, |d| d.node().color);
-
                 match (p_col, s_col, c_col, d_col) {
                     (Black, Black, Black, Black) => {
                         s.set_color(Red);
                         n = Some(p);
-                        p_opt = p.parent().map(|p| (p.which_child(p), p));
+                        p_opt = p.parent().map(|pp| (p.which_child(pp), pp));
                         continue;
                     }
                     (Black, Red, _, _) => {
@@ -341,8 +344,52 @@ impl<T> NodeRef<T> {
     }
 
     fn remove_leaf(self) -> (Node<T>, Option<Option<Self>>) {
-        let node = self.destroy();
-        
+        if self.node().color == Red {
+            let mut ret = None;
+            let node = self.destroy();
+            let p = node.parent;
+            if let Some(p) = p {
+                p.set_child(None, self.which_child(p));
+            } else {
+                ret = Some(None);
+            }
+            (node, ret)
+        } else {
+            self.remove_black_leaf()
+        }
+    }
+
+    fn swap_value(mut self, mut other: Self) {
+        let (n1, n2) = (self.node_mut(), other.node_mut());
+        std::mem::swap(&mut n1.value, &mut n2.value);
+    }
+
+    fn remove(self) -> (Node<T>, Option<Option<Self>>) {
+        let mut ret = None;
+        let mut left = self.child(Left);
+        let mut right = self.child(Right);
+        let mut n = self;
+        if let (Some(l), Some(_)) = (left, right) {
+            n = l.search(|_| Some(Right)).node;
+            self.swap_value(n);
+            left = n.child(Left);
+            right = None;
+        }
+        let child = left.or(right);
+        if let Some(child) = child {
+            let node = n.destroy();
+            let p = node.parent;
+            if let Some(p) = p {
+                p.set_child(Some(child), n.which_child(p));
+            } else {
+                ret = Some(Some(child));
+            }
+            child.set_color(Black);
+            child.set_parent(p);
+            (node, ret)
+        } else {
+            n.remove_leaf()
+        }
     }
 }
 
@@ -356,7 +403,14 @@ impl<T: fmt::Display> NodeRef<T> {
             Red => '🔴',
             Black => '⚫',
         };
-        writeln!(f, "{:indent$}{}{}", "", col_char, node.value, indent = depth * 2)?;
+        writeln!(
+            f,
+            "{:indent$}{}{}",
+            "",
+            col_char,
+            node.value,
+            indent = depth * 2
+        )?;
         if let Some(left) = node.left {
             left.fmt_rec(f, depth + 1)?;
         }
@@ -421,33 +475,11 @@ impl<T: Ord> RedBlackTree<T> {
         let root = self.root?;
         let result = root.search(|v| Direction::try_from(key.cmp(v.borrow())).ok());
         if result.dir.is_none() {
-            let noderef = result.node;
-            let node = noderef.node();
-            let col = node.color;
-            let left = node.left;
-            let right = node.right;
-            match (left, right) {
-                (None, None) => {
-                    if col == Red {
-                        let p = node.parent;
-                        if let Some(p) = p {
-                            p.set_child(None, noderef.which_child(p));
-                        } else {
-                            self.root = None;
-                        }
-                        Some(node.value)
-                    } else {
-                        let (node, new_root) = noderef.remove_black_leaf();
-                        if let Some(new_root) = new_root {
-                            self.root = new_root;
-                        }
-                        Some(node.value)
-                    }
-                }
-                (Some(l), None) => {
-                    
-                }
+            let (node, new_root) = result.node.remove();
+            if let Some(new_root) = new_root {
+                self.root = new_root;
             }
+            Some(node.value)
         } else {
             None
         }
@@ -507,5 +539,58 @@ mod tests {
         assert_eq!(tree.get(&13), Some(&13));
         assert_eq!(tree.get(&14), Some(&14));
         assert_eq!(tree.get(&15), None);
+    }
+
+    #[test]
+    fn remove_test() {
+        let mut tree = RedBlackTree::new();
+        tree.insert(3);
+        tree.insert(2);
+        tree.insert(10);
+        tree.insert(1);
+        tree.insert(4);
+        tree.insert(5);
+        tree.insert(6);
+        tree.insert(14);
+        println!("{}", Tree(tree.root.unwrap()));
+        tree.remove(&3);
+        println!("{}", Tree(tree.root.unwrap()));
+        assert_eq!(tree.get(&3), None);
+        tree.insert(13);
+        println!("-------------------------------------");
+        println!("{}", Tree(tree.root.unwrap()));
+        tree.remove(&13);
+        assert_eq!(tree.get(&13), None);
+        println!("{}", Tree(tree.root.unwrap()));
+
+        println!("-------------------------------------");
+        println!("{}", Tree(tree.root.unwrap()));
+        tree.remove(&14);
+        println!("{}", Tree(tree.root.unwrap()));
+        assert_eq!(tree.get(&14), None);
+
+        tree.insert(20);
+        tree.insert(15);
+        tree.insert(14);
+        println!("-------------------------------------");
+        println!("{}", Tree(tree.root.unwrap()));
+        tree.remove(&10);
+        println!("{}", Tree(tree.root.unwrap()));
+
+        for i in 10..30 {
+            tree.insert(i);
+        }
+        println!("-------------------------------------");
+        println!("{}", Tree(tree.root.unwrap()));
+        tree.remove(&1);
+        println!("{}", Tree(tree.root.unwrap()));
+        tree.remove(&17);
+        println!("{}", Tree(tree.root.unwrap()));
+        tree.remove(&16);
+        println!("{}", Tree(tree.root.unwrap()));
+        tree.remove(&21);
+        println!("{}", Tree(tree.root.unwrap()));
+        tree.insert(21);
+        println!("{}", Tree(tree.root.unwrap()));
     }
 }
