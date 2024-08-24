@@ -73,8 +73,8 @@ impl<const MOD: u32> ModInt<MOD> {
     }
 
     pub const fn inv(self) -> Self {
-        if Self::MOD_IS_PRIME {
-            panic!("Cannot calculate the inverse of a number in a prime modulo");
+        if !Self::MOD_IS_PRIME {
+            panic!("Cannot calculate the inverse of a number in a non-prime modulo.");
         }
         self.pow(MOD - 2)
     }
