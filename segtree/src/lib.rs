@@ -96,9 +96,9 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
             let half_len_max = size_max.map(usize::next_power_of_two);
             let uninit = if Some(half_len_min) == half_len_max {
                 let half_len = half_len_min;
-                let data = iter::repeat_with(|| OP::IDENT)
+                let data = iter::repeat_with(|| op.ident())
                     .take(half_len)
-                    .chain(iter.chain(iter::repeat_with(|| OP::IDENT)).take(half_len))
+                    .chain(iter.chain(iter::repeat_with(|| op.ident())).take(half_len))
                     .collect();
 
                 Self {
@@ -109,11 +109,11 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
             } else {
                 let data = iter.collect::<Vec<_>>();
                 let half_len = data.len().next_power_of_two();
-                let data = iter::repeat_with(|| OP::IDENT)
+                let data = iter::repeat_with(|| op.ident())
                     .take(half_len)
                     .chain(
                         data.into_iter()
-                            .chain(iter::repeat_with(|| OP::IDENT))
+                            .chain(iter::repeat_with(|| op.ident()))
                             .take(half_len),
                     )
                     .collect();
@@ -139,8 +139,8 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
         let (mut l, mut r) = get_lr(self.len, range);
         l += self.len;
         r += self.len;
-        let mut query_l = OP::IDENT;
-        let mut query_r = OP::IDENT;
+        let mut query_l = self.op.ident();
+        let mut query_r = self.op.ident();
         while l < r {
             if r & 1 == 1 {
                 r -= 1;
@@ -195,7 +195,7 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
         };
         let stop = self.data.len() / ((self.len - l + 1).next_power_of_two() >> 1) - 1;
         let mut l = l + self.len;
-        let mut l_query = OP::IDENT;
+        let mut l_query = self.op.ident();
         loop {
             while l & 1 == 0 {
                 l >>= 1;
@@ -236,7 +236,7 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
         }
         let stop = self.len >> r.ilog2();
         let mut r = r + self.len - 1;
-        let mut r_query = OP::IDENT;
+        let mut r_query = self.op.ident();
         loop {
             while r & 1 == 1 {
                 r >>= 1;

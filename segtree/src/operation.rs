@@ -2,7 +2,7 @@ use std::{marker::PhantomData, ops};
 
 pub trait Operator {
     type Query;
-    const IDENT: Self::Query;
+    fn ident(&self) -> Self::Query;
     fn op(&self, a: &Self::Query, b: &Self::Query) -> Self::Query;
     fn op_assign_left(&self, a: &mut Self::Query, b: &Self::Query) {
         *a = self.op(a, b);
@@ -128,7 +128,9 @@ where
     T: ops::Add<Output = T> + Clone + HasZero,
 {
     type Query = T;
-    const IDENT: Self::Query = T::ZERO;
+    fn ident(&self) -> Self::Query {
+        T::ZERO
+    }
     fn op(&self, a: &Self::Query, b: &Self::Query) -> Self::Query {
         a.clone() + b.clone()
     }
@@ -139,7 +141,9 @@ where
     T: ops::Mul<Output = T> + Clone + HasOne,
 {
     type Query = T;
-    const IDENT: Self::Query = T::ONE;
+    fn ident(&self) -> Self::Query {
+        T::ONE
+    }
     fn op(&self, a: &Self::Query, b: &Self::Query) -> Self::Query {
         a.clone() * b.clone()
     }
@@ -159,7 +163,9 @@ where
     T: Ord + Clone + HasMin,
 {
     type Query = T;
-    const IDENT: Self::Query = T::MIN;
+    fn ident(&self) -> Self::Query {
+        T::MIN
+    }
     fn op(&self, a: &Self::Query, b: &Self::Query) -> Self::Query {
         if a > b {
             a.clone()
@@ -176,7 +182,9 @@ where
     T: Ord + Clone + HasMax,
 {
     type Query = T;
-    const IDENT: Self::Query = T::MAX;
+    fn ident(&self) -> Self::Query {
+        T::MAX
+    }
     fn op(&self, a: &Self::Query, b: &Self::Query) -> Self::Query {
         if a < b {
             a.clone()
@@ -190,7 +198,9 @@ impl<T> Idempotent for Min<T> where Min<T>: Operator {}
 
 impl<'a, T: Operator> Operator for &'a T {
     type Query = T::Query;
-    const IDENT: Self::Query = T::IDENT;
+    fn ident(&self) -> Self::Query {
+        T::ident(self)
+    }
     fn op(&self, a: &Self::Query, b: &Self::Query) -> Self::Query {
         T::op(self, a, b)
     }
