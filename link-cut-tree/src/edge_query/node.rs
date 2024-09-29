@@ -335,7 +335,7 @@ where
         node.node_mut().query = q;
     }
 
-    fn get_and_update(&self) -> &Q {
+    fn update_and_get(&self) -> &Q {
         self.update_query_from_child();
         &self.node.node().query
     }
