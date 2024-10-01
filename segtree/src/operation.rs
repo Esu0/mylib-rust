@@ -31,6 +31,11 @@ trait HasMin {
     const MIN: Self;
 }
 
+trait SaturatingAdd<Rhs> {
+    type Output;
+    fn saturating_add(self, rhs: Rhs) -> Self::Output;
+}
+
 macro_rules! impl_trait_integer {
     ($($t:ty),*) => {
         $(
@@ -45,6 +50,13 @@ macro_rules! impl_trait_integer {
             }
             impl HasMin for $t {
                 const MIN: Self = <$t>::MIN;
+            }
+
+            impl SaturatingAdd<$t> for $t {
+                type Output = $t;
+                fn saturating_add(self, rhs: $t) -> Self::Output {
+                    self.saturating_add(rhs)
+                }
             }
         )*
     };
@@ -211,8 +223,7 @@ impl_auto_trait_simple!(T, Add<T>, Mul<T>, Max<T>, Min<T>);
 pub trait Map {
     type OP: Operator;
     type Elem;
-    const IDENT: Self::Elem;
-
+    fn ident(&self) -> Self::Elem;
     fn apply(
         &self,
         q: &<Self::OP as Operator>::Query,
@@ -232,7 +243,9 @@ pub trait Map {
 impl<'a, T: Map> Map for &'a T {
     type OP = T::OP;
     type Elem = T::Elem;
-    const IDENT: Self::Elem = T::IDENT;
+    fn ident(&self) -> Self::Elem {
+        (*self).ident()
+    }
     fn apply(
         &self,
         q: &<Self::OP as Operator>::Query,
@@ -264,7 +277,10 @@ where
 {
     type OP = OP;
     type Elem = Option<<OP as Operator>::Query>;
-    const IDENT: Self::Elem = None;
+    fn ident(&self) -> Self::Elem {
+        None
+    }
+
     fn apply(
         &self,
         q: &<Self::OP as Operator>::Query,
@@ -305,19 +321,25 @@ pub fn range_add<F, OP>() -> RangeAdd<F, OP> {
 impl<T, F> Map for RangeAdd<F, Min<T>>
 where
     Min<T>: Operator<Query = T>,
-    T: ops::Add<F, Output = T> + Clone,
+    T: SaturatingAdd<F, Output = T> + Clone + HasMax + Ord,
     F: HasZero + ops::Add<Output = F> + Clone,
 {
     type OP = Min<T>;
     type Elem = F;
-    const IDENT: Self::Elem = F::ZERO;
+    fn ident(&self) -> Self::Elem {
+        F::ZERO
+    }
 
     fn apply(
         &self,
         q: &<Self::OP as Operator>::Query,
         m: &Self::Elem,
     ) -> <Self::OP as Operator>::Query {
-        q.clone() + m.clone()
+        if q == &T::MAX {
+            T::MAX
+        } else {
+            q.clone().saturating_add(m.clone())
+        }
     }
 
     fn composite(&self, a: &Self::Elem, b: &Self::Elem) -> Self::Elem {

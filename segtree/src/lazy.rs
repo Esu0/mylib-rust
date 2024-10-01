@@ -36,8 +36,12 @@ impl<T, F, OP: Operator<Query = T>, M: Map<OP = OP, Elem = F>> LazySegtree<T, F,
     where
         I: IntoIterator<Item = T>,
     {
-        let Segtree { len, data, op } = Segtree::from_iter_op(iter, op);
-        let lazy = iter::repeat_with(|| M::IDENT).take(len).collect();
+        Self::from_segtree(Segtree::from_iter_op(iter, op), map)
+    }
+
+    pub fn from_segtree(segtree: Segtree<T, OP>, map: M) -> Self {
+        let Segtree { len, data, op } = segtree;
+        let lazy = iter::repeat_with(|| map.ident()).take(len).collect();
         Self {
             data,
             lazy,
@@ -47,7 +51,7 @@ impl<T, F, OP: Operator<Query = T>, M: Map<OP = OP, Elem = F>> LazySegtree<T, F,
     }
 
     fn push(&mut self, i: usize) -> F {
-        let lazy = std::mem::replace(&mut self.lazy[i], M::IDENT);
+        let lazy = std::mem::replace(&mut self.lazy[i], self.map.ident());
         self.map.apply_assign(&mut self.data[i * 2], &lazy);
         self.map.apply_assign(&mut self.data[i * 2 + 1], &lazy);
         if i < self.len() / 2 {
@@ -57,19 +61,19 @@ impl<T, F, OP: Operator<Query = T>, M: Map<OP = OP, Elem = F>> LazySegtree<T, F,
         lazy
     }
 
-    fn update_all(&mut self) {
+    fn apply_all(&mut self) {
         let len_half = self.len().div_ceil(2);
         for i in 1..len_half {
             let (p, ch1) = unsafe { borrow_from_slice_two_mut(&mut self.lazy, i, i * 2) };
             self.map.composite_assign(ch1, p);
             let (p, ch2) = unsafe { borrow_from_slice_two_mut(&mut self.lazy, i, i * 2 + 1) };
             self.map.composite_assign(ch2, p);
-            *p = M::IDENT;
+            *p = self.map.ident();
         }
         for (i, lazy) in self.lazy.iter_mut().enumerate().skip(len_half) {
             self.map.apply_assign(&mut self.data[i * 2], lazy);
             self.map.apply_assign(&mut self.data[i * 2 + 1], lazy);
-            *lazy = M::IDENT;
+            *lazy = self.map.ident();
         }
         for i in (1..self.len()).rev() {
             let q = self.op.op(&self.data[i * 2], &self.data[i * 2 + 1]);
@@ -77,8 +81,14 @@ impl<T, F, OP: Operator<Query = T>, M: Map<OP = OP, Elem = F>> LazySegtree<T, F,
         }
     }
 
+    /// 作用素をすべて作用させた後の配列を返す。データ数をnとすると、O(n)時間かかることに注意。
+    pub fn borrow_data(&mut self) -> &[T] {
+        self.apply_all();
+        &self.data[self.len()..]
+    }
+
     pub fn into_boxed_slice(mut self) -> Box<[T]> {
-        self.update_all();
+        self.apply_all();
         self.data
     }
 
@@ -86,9 +96,36 @@ impl<T, F, OP: Operator<Query = T>, M: Map<OP = OP, Elem = F>> LazySegtree<T, F,
         self.into_boxed_slice().into_vec()
     }
 
-    pub fn update_range<R: RangeBounds<usize>>(&mut self, range: R, m: M::Elem) {
+    /// 頂点`i`の部分木全体に作用素`m`を作用させる。
+    /// `i < self.len()`である必要がある。(大きさ1の部分木に対しては使えない)
+    fn apply_all_tree(&mut self, i: usize, m: &M::Elem) {
+        self.map.apply_assign(&mut self.data[i], m);
+        self.map.composite_assign(&mut self.lazy[i], m);
+    }
+
+    fn eval(&mut self, i: usize) {
+        self.data[i] = self.op.op(&self.data[i * 2], &self.data[i * 2 + 1]);
+    }
+
+    pub fn apply_one(&mut self, i: usize, m: M::Elem) {
+        let mut i = i + self.len();
+        for j in (1..=self.len().trailing_zeros()).rev() {
+            self.push(i >> j);
+        }
+        self.map.apply_assign(&mut self.data[i], &m);
+        while i > 1 {
+            i >>= 1;
+            self.eval(i);
+        }
+    }
+
+    pub fn apply_range<R: RangeBounds<usize>>(&mut self, range: R, m: M::Elem) {
         let (l_orig, r_orig) = get_lr(self.len(), range);
         if l_orig == r_orig {
+            return;
+        }
+        if l_orig == r_orig - 1 {
+            self.apply_one(l_orig, m);
             return;
         }
         let l = l_orig + self.len();
@@ -117,8 +154,9 @@ impl<T, F, OP: Operator<Query = T>, M: Map<OP = OP, Elem = F>> LazySegtree<T, F,
                 let l = l >> i;
                 self.push(l);
                 if l & 1 == 0 {
-                    self.map.apply_assign(&mut self.data[l + 1], &m);
-                    self.map.composite_assign(&mut self.lazy[l + 1], &m);
+                    self.apply_all_tree(l + 1, &m);
+                    // self.map.apply_assign(&mut self.data[l + 1], &m);
+                    // self.map.composite_assign(&mut self.lazy[l + 1], &m);
                 }
                 i -= 1;
             }
@@ -200,11 +238,16 @@ mod tests {
 
     #[test]
     fn update_range_test() {
-        let mut segtree = LazySegtree::from_iter_op(0..14, operation::min(), operation::range_add());
-        segtree.update_range(3..7, 1);
-        segtree.update_range(8..12, 1);
-        segtree.update_range(6.., -2);
-        segtree.update_all();
+        let mut segtree =
+            LazySegtree::from_iter_op(0..14, operation::min(), operation::range_add());
+        // [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+        segtree.apply_range(3..7, 1);
+        // [0, 1, 2, 4, 5, 6, 7, 7, 8, 9, 10, 11, 12, 13]
+        segtree.apply_range(8..12, 1);
+        // [0, 1, 2, 4, 5, 6, 7, 7, 9, 10, 11, 12, 12, 13]
+        segtree.apply_range(6.., -2);
+        // [0, 1, 2, 4, 5, 6, 5, 5, 7, 8, 9, 10, 10, 11]
+        segtree.apply_all();
         {
             let mut i = 1;
             let mut j = 0;
@@ -217,6 +260,31 @@ mod tests {
                 j += 1;
             }
         }
+        {
+            let mut i = 1;
+            let mut j = 0;
+            while i < segtree.data.len() {
+                for _ in 0..(1 << j) {
+                    eprint!("{:?} ", segtree.data[i]);
+                    i += 1;
+                }
+                eprintln!();
+                j += 1;
+            }
+        }
+    }
+
+    #[test]
+    fn update_range_all() {
+        let n = 16;
+        let mut segtree =
+            LazySegtree::from_iter_op((0..n).map(|_| 0), operation::min(), operation::range_add());
+        for d in 0..=n {
+            for l in 0..=n - d {
+                segtree.apply_range(l..l + d, 1);
+            }
+        }
+        segtree.apply_all();
         {
             let mut i = 1;
             let mut j = 0;
