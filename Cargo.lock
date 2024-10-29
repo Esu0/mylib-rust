@@ -235,6 +235,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lib-checker"
+version = "0.1.0"
+dependencies = [
+ "proconio",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.155"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -264,6 +271,10 @@ checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
 ]
+
+[[package]]
+name = "number"
+version = "0.1.0"
 
 [[package]]
 name = "once_cell"
@@ -327,6 +338,12 @@ checksum = "0b33eb56c327dec362a9e55b3ad14f9d2f0904fb5a5b03b513ab5465399e9f43"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "proconio"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c10091de86d0dc939b37a115d74597cbe83af470032a1729d50c98ccee043cb0"
 
 [[package]]
 name = "query"
@@ -436,6 +453,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "segtree"
+version = "0.1.0"
+
+[[package]]
 name = "serde"
 version = "1.0.202"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -495,6 +516,10 @@ checksum = "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b"
 
 [[package]]
 name = "union-find"
+version = "0.1.0"
+
+[[package]]
+name = "util"
 version = "0.1.0"
 
 [[package]]

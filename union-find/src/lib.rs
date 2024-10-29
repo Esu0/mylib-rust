@@ -66,9 +66,9 @@ impl<T> UnionFind<T> {
 }
 
 impl<T: Query> UnionFind<T> {
-    pub fn unite(&mut self, i: usize, j: usize) {
-        let root_i = self.find(i);
-        let root_j = self.find(j);
+    pub fn unite(&mut self, i: usize, j: usize) -> bool {
+        let root_i = self.find_rc(i);
+        let root_j = self.find_rc(j);
         if root_i != root_j {
             let size_i = self.size[root_i];
             let size_j = self.size[root_j];
@@ -83,23 +83,74 @@ impl<T: Query> UnionFind<T> {
                 let new_data = self.query[root_j].query(&self.query[root_i]);
                 self.query[root_j] = new_data;
             }
+            true
+        } else {
+            false
         }
     }
 
-    pub fn find(&self, i: usize) -> usize {
-        self.find_query(i).0
+    pub fn find(&self, mut i: usize) -> usize {
+        let mut p = self.uf[i];
+        while p != i {
+            i = p;
+            p = self.uf[i];
+        }
+        p
     }
 
     pub fn query(&self, i: usize) -> &T {
-        self.find_query(i).1
+        &self.query[self.find(i)]
     }
 
-    pub fn find_query(&self, i: usize) -> (usize, &T) {
-        let parent = self.uf[i];
-        if parent == i {
-            (i, &self.query[i])
-        } else {
-            self.find_query(parent)
+    pub fn find_rc(&mut self, mut i: usize) -> usize {
+        let mut p = self.uf[i];
+        let mut prev_i = usize::MAX;
+        while p != i {
+            self.size[i] = prev_i;
+            prev_i = i;
+            i = p;
+            p = self.uf[i];
         }
+        while prev_i < self.uf.len() {
+            self.uf[prev_i] = p;
+            prev_i = self.size[prev_i];
+        }
+        p
+    }
+
+    pub fn query_rc(&mut self, i: usize) -> &T {
+        let root = self.find_rc(i);
+        &self.query[root]
+    }
+
+    pub fn size(&self, i: usize) -> usize {
+        let root = self.find(i);
+        self.size[root]
+    }
+
+    pub fn size_rc(&mut self, i: usize) -> usize {
+        let root = self.find_rc(i);
+        self.size[root]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_test() {
+        let mut uf = UnionFind::new(vec![(); 10]);
+        uf.unite(0, 1);
+        uf.unite(2, 3);
+        uf.unite(3, 4);
+        uf.unite(5, 6);
+        uf.unite(8, 9);
+        assert_eq!(uf.find_rc(0), uf.find_rc(1));
+        assert_eq!(uf.find_rc(2), uf.find_rc(3));
+        assert_ne!(uf.find_rc(0), uf.find_rc(2));
+        assert_eq!(uf.find_rc(3), uf.find_rc(4));
+        assert_eq!(uf.find_rc(2), uf.find_rc(4));
+        assert_ne!(uf.find_rc(2), uf.find_rc(5));
     }
 }
