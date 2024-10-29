@@ -1,4 +1,7 @@
-use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Rem, RemAssign, Sub, SubAssign};
+use std::ops::{
+    Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div, DivAssign,
+    Mul, MulAssign, Rem, RemAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
+};
 
 pub trait Arithmetic:
     Sized
@@ -19,6 +22,22 @@ pub trait Arithmetic:
     fn rem_euclid(self, rhs: Self) -> Self;
 }
 
+pub trait BitArithmetic:
+    Sized
+    + Arithmetic
+    + BitAnd<Output = Self>
+    + BitOr<Output = Self>
+    + BitXor<Output = Self>
+    + Shl<Self::BitWidthType, Output = Self>
+    + Shr<Self::BitWidthType, Output = Self>
+    + BitAndAssign
+    + BitOrAssign
+    + BitXorAssign
+    + ShlAssign<Self::BitWidthType>
+    + ShrAssign<Self::BitWidthType>
+{
+}
+
 macro_rules! impl_arithmetic_for_int {
     ($($t:ty),*) => {
         $(
@@ -36,6 +55,8 @@ macro_rules! impl_arithmetic_for_int {
                     self.rem_euclid(rhs)
                 }
             }
+
+            impl BitArithmetic for $t {}
         )*
     };
 }
@@ -248,7 +269,6 @@ macro_rules! impl_ops {
 
 impl_ops!(i8, i16, i32, i64, i128, isize);
 impl_ops!(u8, u16, u32, u64, u128, usize);
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
