@@ -1,3 +1,6 @@
+pub mod impls;
+pub use impls::Noop;
+
 use std::{hash::Hash, marker::PhantomData, ops};
 
 pub trait BinaryOperation {
@@ -128,6 +131,13 @@ pub trait Monoid: BinaryOperation<ArgType1 = Self::Element, ArgType2 = Self::Ele
     {
         IdempotentOp(self)
     }
+
+    fn assume_commutative(self) -> CommutativeOp<Self>
+    where
+        Self: Sized,
+    {
+        CommutativeOp(self)
+    }
 }
 
 impl<'a, M: Monoid> Monoid for &'a M {
@@ -190,13 +200,6 @@ pub trait Group: Monoid {
     fn op_inv_assign(&self, a: &mut Self::Element, b: &Self::Element) {
         *a = self.op_inv(a, b);
     }
-
-    fn assume_commutative(self) -> AbelianGroupOp<Self>
-    where
-        Self: Sized,
-    {
-        AbelianGroupOp(self)
-    }
 }
 
 impl<'a, G: Group> Group for &'a G {
@@ -258,63 +261,9 @@ impl<M: Monoid, IF: Fn(&M::Element) -> M::Element> Group for GroupOp<M, IF> {
 /// # アーベル群であるための条件
 /// * 群である。
 /// * 任意の元`a,b`に対して、`a * b = b * a`が成り立つ。(交換則)
-pub trait AbelianGroup: Group {}
+pub trait AbelianGroup: Group + Commutative {}
 
-impl<'a, G: AbelianGroup> AbelianGroup for &'a G {}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub struct AbelianGroupOp<G>(G);
-
-impl<G> ops::Deref for AbelianGroupOp<G> {
-    type Target = G;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<G> ops::DerefMut for AbelianGroupOp<G> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<G> AbelianGroupOp<G> {
-    pub fn into_inner(self) -> G {
-        self.0
-    }
-}
-
-impl<G: Group> BinaryOperation for AbelianGroupOp<G> {
-    type ArgType1 = G::Element;
-    type ArgType2 = G::Element;
-    type OutputType = G::Element;
-
-    fn op(&self, a: &G::Element, b: &G::Element) -> G::Element {
-        self.0.op(a, b)
-    }
-}
-
-impl<G: Group> Monoid for AbelianGroupOp<G> {
-    type Element = G::Element;
-
-    fn identity(&self) -> G::Element {
-        self.0.identity()
-    }
-
-    fn op_assign(&self, a: &mut G::Element, b: &G::Element) {
-        self.0.op_assign(a, b);
-    }
-}
-
-impl<G: Group> Group for AbelianGroupOp<G> {
-    fn inv(&self, a: &G::Element) -> G::Element {
-        self.0.inv(a)
-    }
-}
-
-impl<G: Group> AbelianGroup for AbelianGroupOp<G> {}
+impl<G: Group + Commutative> AbelianGroup for G {}
 
 /// 冪等性を持つ二項演算
 pub trait Idempotent: Monoid {}
@@ -357,11 +306,11 @@ impl<M: Monoid> BinaryOperation for IdempotentOp<M> {
 
 impl<M: Monoid> Monoid for IdempotentOp<M> {
     type Element = M::Element;
-    
+
     fn identity(&self) -> M::Element {
         self.0.identity()
     }
-    
+
     fn op_assign(&self, a: &mut M::Element, b: &M::Element) {
         self.0.op_assign(a, b);
     }
@@ -383,4 +332,70 @@ impl<M: Group> Group for IdempotentOp<M> {
     }
 }
 
-impl<M: AbelianGroup> AbelianGroup for IdempotentOp<M> {}
+impl<M: Commutative> Commutative for IdempotentOp<M> {}
+
+pub trait Commutative: Monoid {}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct CommutativeOp<M>(M);
+
+impl<M> ops::Deref for CommutativeOp<M> {
+    type Target = M;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<M> ops::DerefMut for CommutativeOp<M> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<M> CommutativeOp<M> {
+    pub fn into_inner(self) -> M {
+        self.0
+    }
+}
+
+impl<M: Monoid> BinaryOperation for CommutativeOp<M> {
+    type ArgType1 = M::Element;
+    type ArgType2 = M::Element;
+    type OutputType = M::Element;
+
+    fn op(&self, a: &M::Element, b: &M::Element) -> M::Element {
+        self.0.op(a, b)
+    }
+}
+
+impl<M: Monoid> Monoid for CommutativeOp<M> {
+    type Element = M::Element;
+
+    fn identity(&self) -> M::Element {
+        self.0.identity()
+    }
+
+    fn op_assign(&self, a: &mut M::Element, b: &M::Element) {
+        self.0.op_assign(a, b);
+    }
+}
+
+impl<M: Monoid> Commutative for CommutativeOp<M> {}
+
+impl<M: Group> Group for CommutativeOp<M> {
+    fn inv(&self, a: &M::Element) -> M::Element {
+        self.0.inv(a)
+    }
+
+    fn op_inv(&self, a: &M::Element, b: &M::Element) -> M::Element {
+        self.0.op_inv(a, b)
+    }
+
+    fn op_inv_assign(&self, a: &mut M::Element, b: &M::Element) {
+        self.0.op_inv_assign(a, b);
+    }
+}
+
+impl<M: Idempotent> Idempotent for CommutativeOp<M> {}
