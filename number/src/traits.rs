@@ -51,6 +51,7 @@ pub trait FixedWidth: Integer {}
 
 pub trait ExistsBiggerInt: Integer {
     type Twice: Integer;
+    fn cast_to_twice(self) -> Self::Twice;
 }
 
 macro_rules! impl_exists_bigger_int {
@@ -58,6 +59,9 @@ macro_rules! impl_exists_bigger_int {
         $(
             impl ExistsBiggerInt for $t1 {
                 type Twice = $t2;
+                fn cast_to_twice(self) -> Self::Twice {
+                    self as $t2
+                }
             }
         )*
     }
