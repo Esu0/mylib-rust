@@ -6,7 +6,10 @@ members = [
     "montgomery-modular",
     "number",
     "persistent-array",
+    "query",
+    "segtree",
     "union-find",
+    "util",
     "z-algorithm",
 ]
 

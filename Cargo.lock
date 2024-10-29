@@ -353,6 +353,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c10091de86d0dc939b37a115d74597cbe83af470032a1729d50c98ccee043cb0"
 
 [[package]]
+name = "query"
+version = "0.1.0"
+
+[[package]]
 name = "quote"
 version = "1.0.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -456,6 +460,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "segtree"
+version = "0.1.0"
+
+[[package]]
 name = "serde"
 version = "1.0.202"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -515,6 +523,10 @@ checksum = "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b"
 
 [[package]]
 name = "union-find"
+version = "0.1.0"
+
+[[package]]
+name = "util"
 version = "0.1.0"
 
 [[package]]
