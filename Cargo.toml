@@ -5,6 +5,7 @@ members = [
     "memory-pool",
     "number",
     "persistent-array",
+    "query",
     "segtree",
     "union-find",
     "util",
