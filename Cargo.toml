@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "lib-checker",
     "memory-pool",
+    "number",
     "persistent-array",
     "segtree",
     "union-find",
