@@ -8,3 +8,4 @@ resolver = "2"
 
 [dev-dependencies]
 rand.workspace = true
+number.workspace = true
