@@ -1,36 +1,26 @@
-use traits::Signed;
-
 pub mod traits;
 
-pub fn gcd_ext<T: Signed>(a: T, b: T) -> (T, T, T) {
-    let mut r0 = a;
-    let mut r1 = b;
-    let mut x0 = T::ONE;
-    let mut x1 = T::ZERO;
-    while r1 != T::ZERO {
-        let q = r0 / r1;
-        let r = r0 % r1;
-        r0 = r1;
-        r1 = r;
-        let x = x0 - q * x1;
-        x0 = x1;
-        x1 = x;
+pub fn gcd<T: traits::Integer + Eq + Clone>(mut a: T, mut b: T) -> T {
+    let zero = T::zero();
+    if a == zero {
+        return b;
     }
-    (r0, x0, (r0 - a * x0) / b)
+    while b != zero {
+        let tmp = a % b.clone();
+        a = b;
+        b = tmp;
+    }
+    a
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn gcd_ext_test() {
-        assert_eq!(gcd_ext(10, 6), (2, -1, 2));
-        assert_eq!(gcd_ext(6, 10), (2, 2, -1));
-        assert_eq!(gcd_ext(10, 5), (5, 0, 1));
-        assert_eq!(gcd_ext(5, 10), (5, 1, 0));
-        assert_eq!(gcd_ext(10, 3), (1, 1, -3));
-        assert_eq!(gcd_ext(3, 10), (1, -3, 1));
+    fn gcd_test() {
+        let a = 18u32;
+        let b = 24u32;
+        assert_eq!(gcd(a, b), 6);
     }
 }
