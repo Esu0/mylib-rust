@@ -5,7 +5,7 @@ edition.workspace = true
 resolver = "2"
 
 [dependencies]
+number.workspace = true
 
 [dev-dependencies]
 rand.workspace = true
-number.workspace = true
