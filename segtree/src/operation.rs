@@ -156,7 +156,7 @@ where
 
 impl<T> Idempotent for Min<T> where Min<T>: Operator {}
 
-impl<'a, T: Operator> Operator for &'a T {
+impl<T: Operator> Operator for &T {
     type Query = T::Query;
     const IDENT: Self::Query = T::IDENT;
     fn op(&self, a: &Self::Query, b: &Self::Query) -> Self::Query {
