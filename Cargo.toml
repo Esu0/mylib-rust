@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "algorithm",
     "lib-checker",
     "memory-pool",
     "montgomery-modular",
