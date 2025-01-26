@@ -15,7 +15,7 @@ unsafe fn borrow_two<T>(a: &mut [T], i: usize, j: usize) -> (&mut T, &mut T) {
     (a, b)
 }
 
-impl<'a, T> Deref for ZetaDiv<'a, T> {
+impl<T> Deref for ZetaDiv<'_, T> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
         self.data
