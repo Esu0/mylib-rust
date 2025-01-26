@@ -3,6 +3,7 @@ use std::{
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
 
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PartialOrd, Ord, Hash)]
 pub struct ModInt<const MOD: u32>(u32);
 const fn check_primary<const M: u32>() -> bool {
@@ -77,6 +78,14 @@ impl<const MOD: u32> ModInt<MOD> {
             panic!("Cannot calculate the inverse of a number in a non-prime modulo.");
         }
         self.pow(MOD - 2)
+    }
+
+    pub fn as_u32_slice(slc: &[Self]) -> &[u32] {
+        let ptr = slc.as_ptr();
+        let len = slc.len();
+        unsafe {
+            &*std::ptr::slice_from_raw_parts(ptr as *const u32, len)
+        }
     }
 }
 
@@ -220,8 +229,101 @@ impl<const MOD: u32> DivAssign for ModInt<MOD> {
     }
 }
 
+impl<const MOD: u32> From<i8> for ModInt<MOD> {
+    fn from(value: i8) -> Self {
+        (value as i64).into()
+    }
+}
+
+impl<const MOD: u32> From<i16> for ModInt<MOD> {
+    fn from(value: i16) -> Self {
+        (value as i64).into()
+    }
+}
+
+impl<const MOD: u32> From<i32> for ModInt<MOD> {
+    fn from(value: i32) -> Self {
+        (value as i64).into()
+    }
+}
+
+impl<const MOD: u32> From<i64> for ModInt<MOD> {
+    fn from(value: i64) -> Self {
+        Self(value.rem_euclid(MOD as i64) as u32)
+    }
+}
+
+impl<const MOD: u32> From<i128> for ModInt<MOD> {
+    fn from(value: i128) -> Self {
+        Self(value.rem_euclid(MOD as i128) as u32)
+    }
+}
+
+impl<const MOD: u32> From<u8> for ModInt<MOD> {
+    fn from(value: u8) -> Self {
+        Self(value as u32 % MOD)
+    }
+}
+
+impl<const MOD: u32> From<u16> for ModInt<MOD> {
+    fn from(value: u16) -> Self {
+        Self(value as u32 % MOD)
+    }
+}
+
+impl<const MOD: u32> From<u32> for ModInt<MOD> {
+    fn from(value: u32) -> Self {
+        Self(value % MOD)
+    }
+}
+
+impl<const MOD: u32> From<u64> for ModInt<MOD> {
+    fn from(value: u64) -> Self {
+        Self((value % MOD as u64) as u32)
+    }
+}
+
+impl<const MOD: u32> From<u128> for ModInt<MOD> {
+    fn from(value: u128) -> Self {
+        Self((value % MOD as u128) as u32)
+    }
+}
+
+impl<const MOD: u32> From<usize> for ModInt<MOD> {
+    fn from(value: usize) -> Self {
+        match usize::BITS {
+            32 => (value as u32).into(),
+            64 => (value as u64).into(),
+            x => panic!("{} bits address size is not supported.", x),
+        }
+    }
+}
+
+impl<const MOD: u32> From<isize> for ModInt<MOD> {
+    fn from(value: isize) -> Self {
+        match isize::BITS {
+            32 => (value as i32).into(),
+            64 => (value as i64).into(),
+            x => panic!("{} bits address size is not supported.", x),
+        }
+    }
+}
+
 impl<const MOD: u32> Display for ModInt<MOD> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+// todo: write tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from() {
+        type MInt = ModInt<100>;
+        let a = MInt::from(-20i32) + MInt::from(-10i16);
+        assert_eq!(a.get(), 70);
     }
 }
