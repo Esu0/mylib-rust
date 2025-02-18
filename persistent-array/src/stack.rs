@@ -28,13 +28,13 @@ pub struct PersistentStack<'a, T> {
     pool: &'a PersistentStackPool<T>,
 }
 
-impl<'a, T> Clone for PersistentStack<'a, T> {
+impl<T> Clone for PersistentStack<'_, T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, T> Copy for PersistentStack<'a, T> {}
+impl<T> Copy for PersistentStack<'_, T> {}
 
 struct Node<T> {
     prev: usize,
@@ -94,7 +94,7 @@ impl<T> PersistentStackPool<T> {
 }
 
 
-impl<'a, T> PersistentStack<'a, T> {
+impl<T> PersistentStack<'_, T> {
     pub fn push(&self, value: T) -> Self {
         let new_node = Node::new(self.head, value);
         let pool_last = self.pool.len.get();
