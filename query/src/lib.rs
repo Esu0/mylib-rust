@@ -11,7 +11,7 @@ pub trait BinaryOperation {
     fn op(&self, a: &Self::ArgType1, b: &Self::ArgType2) -> Self::OutputType;
 }
 
-impl<'a, F: BinaryOperation> BinaryOperation for &'a F {
+impl<F: BinaryOperation> BinaryOperation for &F {
     type ArgType1 = F::ArgType1;
     type ArgType2 = F::ArgType2;
     type OutputType = F::OutputType;
@@ -140,7 +140,7 @@ pub trait Monoid: BinaryOperation<ArgType1 = Self::Element, ArgType2 = Self::Ele
     }
 }
 
-impl<'a, M: Monoid> Monoid for &'a M {
+impl<M: Monoid> Monoid for &M {
     type Element = M::Element;
 
     fn identity(&self) -> Self::Element {
@@ -202,7 +202,7 @@ pub trait Group: Monoid {
     }
 }
 
-impl<'a, G: Group> Group for &'a G {
+impl<G: Group> Group for &G {
     fn inv(&self, a: &Self::Element) -> Self::Element {
         (*self).inv(a)
     }
@@ -268,7 +268,7 @@ impl<G: Group + Commutative> AbelianGroup for G {}
 /// 冪等性を持つ二項演算
 pub trait Idempotent: Monoid {}
 
-impl<'a, M: Idempotent> Idempotent for &'a M {}
+impl<M: Idempotent> Idempotent for &M {}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
