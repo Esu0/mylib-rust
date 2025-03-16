@@ -61,7 +61,7 @@ impl<T, F, OP: Operator<Query = T>, M: Map<OP = OP, Elem = F>> LazySegtree<T, F,
         lazy
     }
 
-    fn apply_all(&mut self) {
+    fn update_all(&mut self) {
         let len_half = self.len().div_ceil(2);
         for i in 1..len_half {
             let (p, ch1) = unsafe { borrow_from_slice_two_mut(&mut self.lazy, i, i * 2) };
@@ -83,12 +83,12 @@ impl<T, F, OP: Operator<Query = T>, M: Map<OP = OP, Elem = F>> LazySegtree<T, F,
 
     /// 作用素をすべて作用させた後の配列を返す。データ数をnとすると、O(n)時間かかることに注意。
     pub fn borrow_data(&mut self) -> &[T] {
-        self.apply_all();
+        self.update_all();
         &self.data[self.len()..]
     }
 
     pub fn into_boxed_slice(mut self) -> Box<[T]> {
-        self.apply_all();
+        self.update_all();
         self.data
     }
 
@@ -247,7 +247,8 @@ mod tests {
         // [0, 1, 2, 4, 5, 6, 7, 7, 9, 10, 11, 12, 12, 13]
         segtree.apply_range(6.., -2);
         // [0, 1, 2, 4, 5, 6, 5, 5, 7, 8, 9, 10, 10, 11]
-        segtree.apply_all();
+        segtree.update_all();
+        assert_eq!(&segtree.borrow_data()[..14], &[0, 1, 2, 4, 5, 6, 5, 5, 7, 8, 9, 10, 10, 11]);
         {
             let mut i = 1;
             let mut j = 0;
@@ -284,7 +285,7 @@ mod tests {
                 segtree.apply_range(l..l + d, 1);
             }
         }
-        segtree.apply_all();
+        segtree.update_all();
         {
             let mut i = 1;
             let mut j = 0;
