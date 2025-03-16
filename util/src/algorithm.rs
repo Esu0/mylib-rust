@@ -59,7 +59,9 @@ pub fn upper_bound<T: Integer>(range: impl RangeBounds<T>, mut f: impl FnMut(T) 
             r = m;
         }
     }
-    if f(l) {
+    if l == r {
+        l
+    } else if f(l) {
         l + T::ONE
     } else {
         l
@@ -146,13 +148,18 @@ mod tests {
     #[test]
     fn upper_bound_test() {
         let v = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29];
+        assert_eq!(upper_bound(0..v.len(), |i| v[i] < 2), 0);
         assert_eq!(upper_bound(0..v.len(), |i| v[i] < 10), 4);
         assert_eq!(upper_bound(0..v.len(), |i| v[i] < 11), 4);
         assert_eq!(upper_bound(0..v.len(), |i| v[i] < 11), 4);
         assert_eq!(upper_bound(0..v.len(), |i| v[i] < 12), 5);
+        assert_eq!(upper_bound(0..v.len(), |i| v[i] < 30), v.len());
         assert_eq!(lower_bound(0..v.len(), |i| v[i] > 17), 7);
         assert_eq!(lower_bound(0..v.len(), |i| v[i] > 1), 0);
         assert_eq!(lower_bound(0..v.len(), |i| v[i] > 2), 1);
+        assert_eq!(lower_bound(0..v.len(), |i| v[i] > 29), v.len());
+        let v = [100, 100];
+        assert_eq!(upper_bound(0..v.len(), |i| v[i] == 100), v.len());
     }
 
     #[test]

@@ -244,7 +244,6 @@ impl<T, OP: Operator<Query = T>> Segtree<T, OP> {
             if r == 0 {
                 r = 1;
             }
-            eprintln!("{r}");
             let next_query = self.op.op(&self.data[r], &r_query);
             if pred(&next_query) {
                 r_query = next_query;

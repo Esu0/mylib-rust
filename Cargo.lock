@@ -270,6 +270,13 @@ name = "memory-pool"
 version = "0.1.0"
 
 [[package]]
+name = "montgomery-modular"
+version = "0.1.0"
+dependencies = [
+ "rand",
+]
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -277,6 +284,10 @@ checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
 ]
+
+[[package]]
+name = "number"
+version = "0.1.0"
 
 [[package]]
 name = "once_cell"
@@ -346,6 +357,10 @@ name = "proconio"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c10091de86d0dc939b37a115d74597cbe83af470032a1729d50c98ccee043cb0"
+
+[[package]]
+name = "query"
+version = "0.1.0"
 
 [[package]]
 name = "quote"
