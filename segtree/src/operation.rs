@@ -208,7 +208,7 @@ where
 
 impl<T> Idempotent for Min<T> where Min<T>: Operator {}
 
-impl<'a, T: Operator> Operator for &'a T {
+impl<T: Operator> Operator for &T {
     type Query = T::Query;
     fn ident(&self) -> Self::Query {
         T::ident(self)
@@ -240,7 +240,7 @@ pub trait Map {
     }
 }
 
-impl<'a, T: Map> Map for &'a T {
+impl<T: Map> Map for &T {
     type OP = T::OP;
     type Elem = T::Elem;
     fn ident(&self) -> Self::Elem {

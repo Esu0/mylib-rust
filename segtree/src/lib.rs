@@ -291,20 +291,20 @@ pub struct ValMut<'a, T, OP: Operator<Query = T>> {
     index: usize,
 }
 
-impl<'a, T, OP: Operator<Query = T>> Deref for ValMut<'a, T, OP> {
+impl<T, OP: Operator<Query = T>> Deref for ValMut<'_, T, OP> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         &self.segtree.data[self.index]
     }
 }
 
-impl<'a, T, OP: Operator<Query = T>> DerefMut for ValMut<'a, T, OP> {
+impl<T, OP: Operator<Query = T>> DerefMut for ValMut<'_, T, OP> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.segtree.data[self.index]
     }
 }
 
-impl<'a, T, OP: Operator<Query = T>> Drop for ValMut<'a, T, OP> {
+impl<T, OP: Operator<Query = T>> Drop for ValMut<'_, T, OP> {
     fn drop(&mut self) {
         self.segtree.update_val(self.index);
     }
